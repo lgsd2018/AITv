@@ -445,7 +445,9 @@ interface Storyboard {
   dialogue?: string
   duration?: number
   background_url?: string
+  background_id?: number | string
   video_url?: string
+  composed_url?: string
   scene_id?: string | number
   title?: string
   bgm_prompt?: string
@@ -603,7 +605,7 @@ const handleShotUpdateImmediate = async () => {
       updateData
     })
     
-    await dramaAPI.updateStoryboard(currentShot.value.id.toString(), updateData)
+    await dramaAPI.updateStoryboard(currentShot.value.id, updateData)
     
     emit('update:storyboard', currentShot.value)
     ElMessage.success('分镜更新成功')
@@ -647,7 +649,7 @@ const handleShotUpdate = debounce(async () => {
       updateData
     })
     
-    await dramaAPI.updateStoryboard(currentShot.value.id.toString(), updateData)
+    await dramaAPI.updateStoryboard(currentShot.value.id, updateData)
     
     emit('update:storyboard', currentShot.value)
     ElMessage.success('分镜更新成功')
@@ -756,8 +758,14 @@ const handleGenerateVideo = async () => {
     generating.value = true
     ElMessage.info('正在生成视频...')
     
+    if (!props.dramaId) {
+      ElMessage.warning('未找到剧本ID，无法生成视频')
+      return
+    }
+    
     await videoAPI.generateVideo({
-      scene_id: parseInt(currentShot.value.id),
+      storyboard_id: Number(currentShot.value.id),
+      drama_id: props.dramaId,
       prompt: currentShot.value.action
     })
     
@@ -788,7 +796,7 @@ const handleComposeScene = async () => {
     return
   }
   
-  if (selectedCharacters.length === 0) {
+  if (selectedCharacters.value.length === 0) {
     ElMessage.warning('请先选择场景角色')
     return
   }

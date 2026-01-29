@@ -1,9 +1,15 @@
 import type {
-    GenerateCharactersRequest
+    GenerateCharactersRequest,
+    ParseScriptRequest,
+    ParseScriptResult
 } from '../types/generation'
 import request from '../utils/request'
 
 export const generationAPI = {
+  parseScript(data: ParseScriptRequest) {
+    return request.post<ParseScriptResult>('/generation/parse-script', data)
+  },
+
   generateCharacters(data: GenerateCharactersRequest) {
     return request.post<{ task_id: string; status: string; message: string }>('/generation/characters', data)
   },

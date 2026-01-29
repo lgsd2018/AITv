@@ -917,6 +917,49 @@ const editCurrentEpisodeScript = () => {
   }
 }
 
+const parseTaskResult = (result: any) => {
+  if (!result) return null
+  if (typeof result === 'string') {
+    try {
+      return JSON.parse(result)
+    } catch {
+      return null
+    }
+  }
+  return result
+}
+
+const waitForTaskComplete = async (taskId: string) => {
+  return new Promise<any>((resolve, reject) => {
+    let timer: number | null = null
+    const checkStatus = async () => {
+      try {
+        const task = await generationAPI.getTaskStatus(taskId)
+        if (task.status === 'completed') {
+          if (timer) {
+            clearInterval(timer)
+          }
+          resolve(task)
+          return
+        }
+        if (task.status === 'failed') {
+          if (timer) {
+            clearInterval(timer)
+          }
+          reject(new Error(task.error || '任务失败'))
+        }
+      } catch (error) {
+        if (timer) {
+          clearInterval(timer)
+        }
+        reject(error)
+      }
+    }
+    checkStatus()
+    timer = window.setInterval(checkStatus, 2000)
+  })
+}
+
 // AI自动拆分分镜
 const generateShots = async () => {
   if (!currentEpisode.value?.script_content) {
@@ -928,16 +971,25 @@ const generateShots = async () => {
   try {
     ElMessage.info('AI正在拆分镜头...')
     
-    // 调用分镜拆分API
-    const result = await generationAPI.generateShots({
-      episode_id: currentEpisode.value.id,
-      script_content: currentEpisode.value.script_content
-    })
+    const episodeId = currentEpisode.value.id
+    if (!episodeId) {
+      ElMessage.error('章节信息不存在')
+      return
+    }
+
+    const response = await generationAPI.generateStoryboard(String(episodeId))
+    const task = await waitForTaskComplete(response.task_id)
+    const taskResult = parseTaskResult(task.result)
+    const total = typeof taskResult?.total === 'number' ? taskResult.total : (taskResult?.storyboards?.length || 0)
     
-    ElMessage.success(`成功拆分 ${result.shots.length} 个镜头`)
+    if (total > 0) {
+      ElMessage.success(`成功拆分 ${total} 个镜头`)
+    } else {
+      ElMessage.success('分镜拆分任务已完成')
+    }
     await loadDramaData()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || '拆分失败')
+    ElMessage.error(error.response?.data?.message || error.message || '拆分失败')
   } finally {
     generatingShots.value = false
   }
@@ -977,44 +1029,26 @@ const parseShotsToCharacters = async () => {
     // 从所有镜头内容中提取角色
     const shotsContent = currentEpisode.value.shots.map((s: any) => s.content).join('\n')
     
-    const parseResult = await generationAPI.parseScript({
+    const episodeId = Number(currentEpisode.value.id)
+    const response = await generationAPI.generateCharacters({
       drama_id: drama.value!.id,
-      script_content: shotsContent,
-      auto_split: false
+      episode_id: Number.isFinite(episodeId) ? episodeId : undefined,
+      outline: shotsContent
     })
+
+    const task = await waitForTaskComplete(response.task_id)
+    const taskResult = parseTaskResult(task.result)
+    const count = typeof taskResult?.count === 'number' ? taskResult.count : (taskResult?.characters?.length || 0)
     
-    if (parseResult.characters && parseResult.characters.length > 0) {
-      const existingCharacters = drama.value?.characters || []
-      const existingNames = new Set(existingCharacters.map(c => c.name))
-      
-      // 只添加新角色
-      const newCharacters = parseResult.characters.filter(
-        (c: any) => !existingNames.has(c.name)
-      )
-      
-      if (newCharacters.length > 0) {
-        const allCharacters = [
-          ...existingCharacters.map(c => ({
-            name: c.name,
-            role: c.role,
-            appearance: c.appearance,
-            personality: c.personality,
-            description: c.description
-          })),
-          ...newCharacters
-        ]
-        await dramaAPI.saveCharacters(drama.value!.id, allCharacters)
-        ElMessage.success(`成功解析 ${newCharacters.length} 个新角色`)
-      } else {
-        ElMessage.info('未发现新角色')
-      }
+    if (count > 0) {
+      ElMessage.success(`成功解析 ${count} 个角色`)
     } else {
       ElMessage.warning('未解析到角色信息')
     }
     
     await loadDramaData()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || '解析失败')
+    ElMessage.error(error.response?.data?.message || error.message || '解析失败')
   } finally {
     parsingCharacters.value = false
   }
@@ -1126,7 +1160,15 @@ const generateCharacterImage = async (character: any) => {
   
   generatingCharacterIds.value.push(character.id)
   try {
-    const res = await characterLibraryAPI.generateCharacterImage(character.id)
+    const style = drama.value?.style
+    const referenceWork = drama.value?.reference_work
+    await characterLibraryAPI.generateCharacterImage(
+      character.id,
+      undefined,
+      style,
+      undefined,
+      referenceWork
+    )
     ElMessage.success(`${character.name}的形象生成成功`)
     await loadDramaData()
   } catch (error: any) {

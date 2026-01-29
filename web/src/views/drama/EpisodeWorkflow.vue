@@ -34,6 +34,15 @@
         </template>
       </AppHeader>
 
+    <div class="project-info-section animate-fade-in" v-if="drama" style="margin-bottom: 20px;">
+      <el-descriptions :column="4" border size="small" class="info-descriptions">
+        <el-descriptions-item label="项目名称">{{ drama.title }}</el-descriptions-item>
+        <el-descriptions-item label="画面风格">{{ getStyleLabel(drama.style) }}</el-descriptions-item>
+        <el-descriptions-item label="参考作品">{{ drama.reference_work || '无' }}</el-descriptions-item>
+        <el-descriptions-item label="画面比例">{{ drama.aspect_ratio || '16:9' }}</el-descriptions-item>
+      </el-descriptions>
+    </div>
+
     <!-- 阶段 0: 章节内容 + 提取角色场景 -->
     <el-card v-show="currentStep === 0" shadow="never" class="stage-card stage-card-fullscreen">
       <div class="stage-body stage-body-fullscreen">
@@ -222,7 +231,12 @@
                 
                 <div class="card-image-container">
                   <div v-if="char.image_url" class="char-image">
-                    <el-image :src="char.image_url" fit="cover" />
+                    <el-image 
+                      :src="char.image_url" 
+                      fit="cover" 
+                      :preview-src-list="[char.image_url]"
+                      :preview-teleported="true"
+                    />
                   </div>
                   <div v-else-if="char.image_generation_status === 'pending' || char.image_generation_status === 'processing' || generatingCharacterImages[char.id]" class="char-placeholder generating">
                     <el-icon :size="64" class="rotating"><Loading /></el-icon>
@@ -345,7 +359,12 @@
 
                 <div class="card-image-container">
                   <div v-if="scene.image_url" class="scene-image">
-                    <el-image :src="scene.image_url" fit="cover" />
+                    <el-image 
+                      :src="scene.image_url" 
+                      fit="cover" 
+                      :preview-src-list="[scene.image_url]"
+                      :preview-teleported="true"
+                    />
                   </div>
                   <div v-else-if="scene.image_generation_status === 'pending' || scene.image_generation_status === 'processing' || generatingSceneImages[scene.id]" class="scene-placeholder generating">
                     <el-icon :size="64" class="rotating"><Loading /></el-icon>
@@ -680,6 +699,34 @@
         <el-form-item :label="$t('common.name')">
           <el-input v-model="currentEditItem.name" disabled />
         </el-form-item>
+
+        <el-form-item label="画面风格">
+          <el-input v-model="editStyle" disabled placeholder="继承自项目设置">
+            <template #append>项目预设</template>
+          </el-input>
+        </el-form-item>
+
+        <el-form-item label="参考作品">
+          <el-input v-model="editReference" disabled placeholder="继承自项目设置">
+            <template #append>项目预设</template>
+          </el-input>
+        </el-form-item>
+
+        <el-form-item label="图片尺寸">
+          <el-select v-model="editSize" style="width: 100%" disabled>
+            <el-option label="16:9 (2560x1440)" value="2560x1440" />
+            <el-option label="9:16 (1440x2560)" value="1440x2560" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item v-if="currentEditType === 'character'" label="辅助设置">
+          <el-checkbox-group v-model="editViewSettings">
+            <el-checkbox label="white_background">白底图 (White Background)</el-checkbox>
+            <el-checkbox label="three_views">三视图 (Front, Side, Back)</el-checkbox>
+            <el-checkbox label="composition_fix">构图修正 (Centered, No Crop)</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+
         <el-form-item :label="$t('workflow.imagePrompt')">
           <el-input
             v-model="editPrompt"
@@ -687,6 +734,11 @@
             :rows="6"
             :placeholder="$t('workflow.imagePromptPlaceholder')"
           />
+          <!-- 一键优化与撤销按钮 -->
+          <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end;">
+            <el-button size="small" @click="optimizePrompt">一键优化提示词</el-button>
+            <el-button size="small" :disabled="!canUndoOptimize" @click="undoOptimizePrompt">撤销优化</el-button>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -831,6 +883,27 @@ const episodeNumber = parseInt(route.params.episodeNumber as string)
 
 const drama = ref<Drama>()
 
+// Style label mapping
+const styleLabelMap: Record<string, string> = {
+  'Cel-shaded Anime': '赛璐璐日漫',
+  'Makoto Shinkai Style': '新海诚电影风格',
+  'Studio Ghibli Style': '吉卜力/宫崎骏风格',
+  'American Animation Style': '欧美动画风格',
+  'Chinese Animation Style': '国漫风格',
+  'Shanghai Ink Animation': '上美水墨动画风',
+  'Impasto Fantasy Style': '厚涂幻想风',
+  'Magical Girl Style': '魔法少女风格',
+  'Sci-Fi Cyberpunk Style': '科幻赛博朋克风格',
+  'Chibi Style': 'Q版风格',
+  'Light Novel Cover Style': '轻小说封面插画风',
+  'realistic': '写实风格 (Realistic)'
+}
+
+const getStyleLabel = (style: string | undefined) => {
+  if (!style) return '默认 (Realistic)'
+  return styleLabelMap[style] || style
+}
+
 // 生成 localStorage key
 const getStepStorageKey = () => `episode_workflow_step_${dramaId}_${episodeNumber}`
 
@@ -844,7 +917,7 @@ const extractingCharactersAndBackgrounds = ref(false)
 const batchGeneratingCharacters = ref(false)
 const batchGeneratingScenes = ref(false)
 const generatingCharacterImages = ref<Record<number, boolean>>({})
-const generatingSceneImages = ref<Record<string, boolean>>({})
+const generatingSceneImages = ref<Record<number, boolean>>({})
 
 // 选择状态
 const selectedCharacterIds = ref<number[]>([])
@@ -860,6 +933,14 @@ const modelConfigDialogVisible = ref(false)
 const currentEditItem = ref<any>({ name: '' })
 const currentEditType = ref<'character' | 'scene'>('character')
 const editPrompt = ref('')
+const editStyle = ref('')
+const editReference = ref('')
+const editSize = ref('')
+const editViewSettings = ref<string[]>([])
+// 一键优化提示词的撤销缓存
+const optimizePromptHistory = ref('')
+// 控制撤销按钮是否可用
+const canUndoOptimize = ref(false)
 const libraryItems = ref<any[]>([])
 const currentUploadTarget = ref<any>(null)
 const uploadAction = computed(() => '/api/v1/upload/image')
@@ -1261,7 +1342,7 @@ const extractCharactersAndBackgrounds = async () => {
     const [characterTask, backgroundTask] = await Promise.all([
       generationAPI.generateCharacters({
         drama_id: dramaId.toString(),
-        episode_id: episodeId,
+        episode_id: parseInt(episodeId),
         outline: currentEpisode.value.script_content || '',
         count: 0,
         model: selectedTextModel.value  // 传递用户选择的文本模型
@@ -1304,7 +1385,7 @@ const extractCharactersAndBackgrounds = async () => {
 
 // 轮询提取任务状态
 const pollExtractTask = async (taskId: string, type: 'character' | 'background') => {
-  const maxAttempts = 60 // 最多轮询60次（2分钟）
+  const maxAttempts = 300 // 最多轮询300次（10分钟）
   const interval = 2000 // 每2秒查询一次
   
   for (let i = 0; i < maxAttempts; i++) {
@@ -1338,13 +1419,35 @@ const pollExtractTask = async (taskId: string, type: 'character' | 'background')
 }
 
 
-const generateCharacterImage = async (characterId: number) => {
+const generateCharacterImage = async (characterId: number, styleParam?: string, sizeParam?: string, referenceWorkParam?: string, whiteBackgroundParam?: boolean) => {
   generatingCharacterImages.value[characterId] = true
   
   try {
+    // 准备参数
+    let style = styleParam
+    let reference = referenceWorkParam
+    let size = sizeParam
+    
+    // 如果未提供参数，则使用默认值
+    if (!style && drama.value?.style) {
+        style = drama.value.style
+    }
+    
+    if (!reference && drama.value?.reference_work) {
+        reference = drama.value.reference_work
+    }
+    
+    if (!size) {
+        if (drama.value?.aspect_ratio === '9:16') {
+            size = '1440x2560'
+        } else {
+            size = '2560x1440'
+        }
+    }
+    
     // 获取用户选择的图片生成模型
     const model = selectedImageModel.value || undefined
-    const response = await characterLibraryAPI.generateCharacterImage(characterId.toString(), model)
+    const response = await characterLibraryAPI.generateCharacterImage(characterId.toString(), model, style, size, reference, whiteBackgroundParam)
     const imageGenId = response.image_generation?.id
     
     if (imageGenId) {
@@ -1407,14 +1510,14 @@ const batchGenerateCharacterImages = async () => {
   }
 }
 
-const generateSceneImage = async (sceneId: string) => {
+const generateSceneImage = async (sceneId: number) => {
   generatingSceneImages.value[sceneId] = true
   
   try {
     // 获取用户选择的图片生成模型
     const model = selectedImageModel.value || undefined
     const response = await dramaAPI.generateSceneImage({ 
-      scene_id: parseInt(sceneId),
+      scene_id: sceneId,
       model
     })
     const imageGenId = response.image_generation?.id
@@ -1446,7 +1549,7 @@ const batchGenerateSceneImages = async () => {
   batchGeneratingScenes.value = true
   try {
     const promises = selectedSceneIds.value.map(sceneId => 
-      generateSceneImage(sceneId.toString())
+      generateSceneImage(sceneId)
     )
     const results = await Promise.allSettled(promises)
     
@@ -1586,7 +1689,7 @@ const saveShotEdit = async () => {
     savingShot.value = true
     
     // 调用API更新镜头
-    await dramaAPI.updateStoryboard(editingShot.value.id.toString(), editingShot.value)
+    await dramaAPI.updateStoryboard(editingShot.value.id, editingShot.value)
     
     // 更新本地数据
     if (currentEpisode.value?.storyboards) {
@@ -1608,16 +1711,349 @@ const openPromptDialog = (item: any, type: 'character' | 'scene') => {
   currentEditItem.value.name = item.name || item.location
   currentEditType.value = type
   editPrompt.value = item.prompt || item.appearance || item.description || ''
+  // 重置优化历史，保证每次打开弹窗可独立撤销
+  optimizePromptHistory.value = ''
+  canUndoOptimize.value = false
+  
+  // 初始化额外字段
+  editStyle.value = drama.value?.style || ''
+  editReference.value = drama.value?.reference_work || ''
+  
+  // 确保风格和参考作品在提示词中可见
+  if (editStyle.value && !editPrompt.value.toLowerCase().includes(editStyle.value.toLowerCase())) {
+    editPrompt.value += `, ${editStyle.value} style`
+  }
+  
+  if (editReference.value && !editPrompt.value.toLowerCase().includes(editReference.value.toLowerCase())) {
+    editPrompt.value += `, style reference: ${editReference.value}`
+  }
+  
+  // 根据宽高比设置默认尺寸
+  if (drama.value?.aspect_ratio === '9:16') {
+      editSize.value = '1440x2560'
+  } else {
+      editSize.value = '2560x1440'
+  }
+  
+  // 初始化视图设置
+  if (type === 'character') {
+      const settings = []
+      // 默认选中，如果提示词中没有明确否定（这里简单处理为默认选中）
+      // 检查提示词中是否已包含
+      const currentPrompt = editPrompt.value.toLowerCase()
+      
+      // 白底图
+      // 检查提示词中是否包含白底相关的关键词
+      const whiteBgKeywords = ['white background', 'simple background', 'solid background', 'blank background']
+      const hasWhiteBg = whiteBgKeywords.some(keyword => currentPrompt.includes(keyword))
+      
+      if (hasWhiteBg || !currentPrompt) {
+          settings.push('white_background')
+      }
+      
+      // 三视图
+      // 检查提示词中是否包含三视图相关的关键词
+      const threeViewsKeywords = ['three views', 'front view', 'side view', 'back view', 'character turnaround', 'character sheet', 'orthographic']
+      const hasThreeViews = threeViewsKeywords.some(keyword => currentPrompt.includes(keyword))
+      
+      if (hasThreeViews || !currentPrompt) {
+          settings.push('three_views')
+      }
+      
+      // 构图修正 (默认选中)
+      // 检查是否包含任何一个构图修正的关键正向词
+      const hasCompositionPrompts = ['best quality', 'character centered', 'full body fully visible', 'whole body', 'no cropping', 'padding around edges']
+          .some(p => currentPrompt.includes(p))
+      
+      if (hasCompositionPrompts || !currentPrompt) {
+          settings.push('composition_fix')
+      }
+      
+      editViewSettings.value = settings
+  } else {
+      editViewSettings.value = []
+  }
+  
   promptDialogVisible.value = true
+}
+
+// 保护性提示词识别与优化处理
+const optimizePrompt = () => {
+  // 提示词为空时不进行优化
+  if (!editPrompt.value || !editPrompt.value.trim()) {
+    ElMessage.warning('提示词为空，无法优化')
+    return
+  }
+  // 记录优化前内容用于撤销
+  optimizePromptHistory.value = editPrompt.value
+  const optimized = buildOptimizedPrompt(editPrompt.value)
+  editPrompt.value = optimized
+  canUndoOptimize.value = true
+  ElMessage.success('提示词已优化，已保护白底、三视图、基础风格及构图关键词')
+}
+
+// 撤销优化提示词
+const undoOptimizePrompt = () => {
+  if (!canUndoOptimize.value || !optimizePromptHistory.value) {
+    return
+  }
+  editPrompt.value = optimizePromptHistory.value
+  optimizePromptHistory.value = ''
+  canUndoOptimize.value = false
+  ElMessage.info('已撤销优化')
+}
+
+// 构建优化后的提示词（不修改保护段落）
+const buildOptimizedPrompt = (rawPrompt: string) => {
+  // 规范化标点与空白
+  const normalized = rawPrompt
+    .replace(/，/g, ',')
+    .replace(/\s+/g, ' ')
+    .replace(/,+/g, ',')
+    .trim()
+
+  const segments = normalized
+    .split(/[,，\n]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+
+  // 白底图保护关键词
+  const whiteBgProtected = [
+    '100% pure white solid background',
+    'entire image is solid white',
+    'no black bars',
+    'no black borders',
+    'no dark areas',
+    'completely blank background',
+    'flat white background',
+    'no scenery',
+    'no environmental elements',
+    'no extra details outside the character',
+    'white background',
+    'solid white background',
+    'pure white background',
+    '纯白背景',
+    '白底'
+  ]
+  // 三视图保护关键词
+  const threeViewsProtected = [
+    'character turnaround sheet',
+    'orthographic design drawing',
+    'three orthogonal views',
+    'front view',
+    'side view',
+    'back view',
+    'no missing views',
+    'consistent character details',
+    'professional character design sheet',
+    '三视图',
+    '正面',
+    '侧面',
+    '背面'
+  ]
+  // 构图修正保护关键词
+  const compositionProtected = [
+    'full body fully visible',
+    'whole body',
+    'no cropping',
+    'no out of frame',
+    'no partial body',
+    'padding around edges',
+    'character centered',
+    'clean and tidy layout',
+    'no ugly',
+    'no disfigured',
+    'no malformed limbs',
+    'no extra limbs',
+    'no missing limbs',
+    '中心构图',
+    '对称',
+    '黄金分割'
+  ]
+  // 基础画面风格保护关键词
+  const styleCoreKeywords = [
+    'cel-shaded anime',
+    'makoto shinkai',
+    'studio ghibli',
+    'american animation',
+    'chinese animation',
+    'shanghai ink',
+    'impasto fantasy',
+    'magical girl',
+    'sci-fi cyberpunk',
+    'chibi',
+    'light novel cover',
+    'realistic',
+    '写实',
+    '赛璐璐',
+    '新海诚',
+    '吉卜力',
+    '欧美',
+    '国漫',
+    '水墨',
+    '厚涂',
+    '魔法少女',
+    '赛博',
+    'Q版'
+  ]
+  // 参考作品保护关键词
+  const referenceProtected = ['style reference', '参考作品', 'reference work']
+  // 白底图冲突关键词（仅用于非保护段落清理）
+  const whiteBgConflict = [
+    'dark background',
+    'black background',
+    'gray background',
+    'grey background',
+    'gradient background',
+    'vignette',
+    'shadow',
+    'floor',
+    'ground',
+    'scenery',
+    'environment'
+  ]
+
+  // 判断是否有白底保护段落
+  const hasWhiteBgProtected = segments.some(seg => {
+    const lower = seg.toLowerCase()
+    return whiteBgProtected.some(keyword => lower.includes(keyword))
+  })
+
+  const resultSegments: string[] = []
+  const seen = new Set<string>()
+  let hasStyleCore = false
+
+  // 逐段处理，保护段落完全保留
+  segments.forEach(seg => {
+    const lower = seg.toLowerCase()
+    const isWhiteProtected = whiteBgProtected.some(keyword => lower.includes(keyword))
+    const isThreeViewsProtected = threeViewsProtected.some(keyword => lower.includes(keyword))
+    const isCompositionProtected = compositionProtected.some(keyword => lower.includes(keyword))
+    const isStyleProtected = styleCoreKeywords.some(keyword => lower.includes(keyword))
+    const isReferenceProtected = referenceProtected.some(keyword => lower.includes(keyword))
+
+    if (isStyleProtected) {
+      hasStyleCore = true
+    }
+
+    const normalizedKey = lower
+    if (seen.has(normalizedKey)) {
+      return
+    }
+
+    // 保护段落直接保留
+    if (isWhiteProtected || isThreeViewsProtected || isCompositionProtected || isStyleProtected || isReferenceProtected) {
+      resultSegments.push(seg)
+      seen.add(normalizedKey)
+      return
+    }
+
+    // 清理与白底冲突的非保护段落
+    if (hasWhiteBgProtected && whiteBgConflict.some(keyword => lower.includes(keyword))) {
+      return
+    }
+
+    // 清理多余空白
+    const cleaned = seg.replace(/\s+/g, ' ').trim()
+    if (!cleaned) return
+
+    resultSegments.push(cleaned)
+    seen.add(normalizedKey)
+  })
+
+  // 适度增强基础风格描述（仅补充，避免显著增量）
+  const hasStyleEnhancement = resultSegments.some(seg =>
+    /cinematic|highly detailed|细节|电影质感/i.test(seg)
+  )
+  if (hasStyleCore && !hasStyleEnhancement && rawPrompt.length < 400) {
+    resultSegments.push('highly detailed, clean silhouette')
+  }
+
+  return resultSegments.join(', ')
 }
 
 const savePrompt = async () => {
   try {
     if (currentEditType.value === 'character') {
+      // 处理视图设置，追加到提示词
+      let finalPrompt = editPrompt.value
+      
+      if (editViewSettings.value.includes('white_background')) {
+          // 1. 白底图提示词
+          const whiteBgPrompts = [
+              '100% pure white solid background',
+              'entire image is solid white',
+              'no black bars',
+              'no black borders',
+              'no dark areas',
+              'completely blank background',
+              'flat white background',
+              'no scenery',
+              'no environmental elements',
+              'no extra details outside the character'
+          ]
+          
+          const missingBgPrompts = whiteBgPrompts.filter(p => !finalPrompt.toLowerCase().includes(p))
+          if (missingBgPrompts.length > 0) {
+              finalPrompt += ', ' + missingBgPrompts.join(', ')
+          }
+      }
+      
+      if (editViewSettings.value.includes('three_views')) {
+           // 2. 三视图提示词
+           const views = [
+               'character turnaround sheet',
+               'orthographic design drawing',
+               'three orthogonal views of the same character on one single image',
+               'front view', 
+               'side view', 
+               'back view',
+               'no missing views',
+               'consistent character details across all views',
+               'professional character design sheet'
+           ]
+           const missingViews = views.filter(v => !finalPrompt.toLowerCase().includes(v))
+           if (missingViews.length > 0) {
+               finalPrompt += ', ' + missingViews.join(', ')
+           }
+       }
+       
+       if (editViewSettings.value.includes('composition_fix')) {
+           // 3. 构图修正提示词
+           const compositionPrompts = [
+               'full body fully visible',
+               'whole body',
+               'no cropping',
+               'no out of frame',
+               'no partial body',
+               'padding around edges',
+               'character centered',
+               'clean and tidy layout',
+               'no ugly',
+               'no disfigured',
+               'no malformed limbs',
+               'no extra limbs',
+               'no missing limbs'
+           ]
+           
+           const missingPrompts = compositionPrompts.filter(p => !finalPrompt.toLowerCase().includes(p))
+           if (missingPrompts.length > 0) {
+               finalPrompt += ', ' + missingPrompts.join(', ')
+           }
+       }
+       
+       // 更新提示词显示
+       editPrompt.value = finalPrompt
+      
       await characterLibraryAPI.updateCharacter(currentEditItem.value.id, {
-        appearance: editPrompt.value
+        appearance: finalPrompt
       })
-      await generateCharacterImage(currentEditItem.value.id)
+      
+      // 计算是否启用白底图
+      const useWhiteBackground = editViewSettings.value.includes('white_background')
+      
+      // 传递自定义参数进行生成
+      await generateCharacterImage(currentEditItem.value.id, editStyle.value, editSize.value, editReference.value, useWhiteBackground)
     } else {
       // 1. 先保存场景提示词
       await dramaAPI.updateScenePrompt(currentEditItem.value.id.toString(), editPrompt.value)
@@ -1657,7 +2093,7 @@ const uploadCharacterImage = (characterId: number) => {
   uploadDialogVisible.value = true
 }
 
-const uploadSceneImage = (sceneId: string) => {
+const uploadSceneImage = (sceneId: number) => {
   currentUploadTarget.value = { id: sceneId, type: 'scene' }
   uploadDialogVisible.value = true
 }
@@ -1835,6 +2271,25 @@ onMounted(() => {
 .content-wrapper {
   margin: 0 auto;
   width: 100%;
+}
+
+.project-info-section {
+  margin-bottom: var(--space-3);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  
+  :deep(.el-descriptions__label) {
+    background-color: var(--bg-secondary);
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  
+  :deep(.el-descriptions__content) {
+    background-color: var(--bg-card);
+    color: var(--text-primary);
+  }
 }
 
 /* Header styles matching PageHeader component */
@@ -2391,5 +2846,25 @@ onMounted(() => {
 :deep(.el-upload-dragger) {
   background: var(--bg-secondary);
   border-color: var(--border-primary);
+}
+
+.project-info-section {
+  background: var(--bg-card);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-primary);
+  margin-bottom: 20px;
+
+  .info-descriptions {
+    :deep(.el-descriptions__label) {
+      font-weight: bold;
+      color: var(--text-secondary);
+      background-color: var(--bg-secondary);
+    }
+    :deep(.el-descriptions__content) {
+      color: var(--text-primary);
+      background-color: var(--bg-card);
+    }
+  }
 }
 </style>

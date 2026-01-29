@@ -394,19 +394,20 @@ import { videoMerger, type MergeProgress } from '@/utils/videoMerger'
 import { trimAndMergeVideos } from '@/utils/ffmpeg'
 
 interface Scene {
-  id: string
+  id: number | string
   storyboard_number: number
+  storyboard_id?: number
   title?: string
   description?: string
   location?: string
   time?: string
-  video_url: string
+  video_url?: string
   duration?: number
 }
 
 interface TimelineClip {
   id: string
-  storyboard_id: string
+  storyboard_id: number
   storyboard_number: number
   video_url: string
   start_time: number
@@ -787,7 +788,7 @@ const timeRulerTicks = computed(() => {
 })
 
 // 片段样式计算
-const getClipStyle = (clip: TimelineClip) => {
+const getClipStyle = (clip: TimelineClip | AudioClip) => {
   return {
     left: 100 + clip.position * pixelsPerSecond.value + 'px',
     width: clip.duration * pixelsPerSecond.value + 'px'
@@ -1391,7 +1392,7 @@ const handleResizeMove = (event: MouseEvent, clip: TimelineClip) => {
     }
   } else {
     // 调整结束时间
-    const scene = props.scenes.find(s => s.id === clip.scene_id)
+    const scene = props.scenes.find(s => s.id == clip.storyboard_id)
     const maxDuration = scene?.duration || 10
     const maxEndTime = clip.start_time + maxDuration
     
@@ -1693,7 +1694,8 @@ const handleExport = async () => {
 
     // 初始化FFmpeg
     await videoMerger.initialize((progress) => {
-      mergeProgress.value = progress
+      mergeProgressDetail.value = progress
+      mergeProgress.value = progress.progress
     })
 
     // 准备视频片段数据（包含转场信息）

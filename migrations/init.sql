@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS dramas (
     description TEXT,
     genre TEXT,
     style TEXT NOT NULL DEFAULT 'realistic',
+    style_prompt TEXT,
+    reference_work TEXT,
+    aspect_ratio TEXT NOT NULL DEFAULT '16:9',
+    reference_image TEXT,
     total_episodes INTEGER NOT NULL DEFAULT 1,
     total_duration INTEGER NOT NULL DEFAULT 0, -- 总时长(秒)
     status TEXT NOT NULL DEFAULT 'draft', -- draft, in_progress, completed

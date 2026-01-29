@@ -106,6 +106,15 @@
                     formatDate(drama?.created_at)
                   }}</span>
                 </el-descriptions-item>
+                <el-descriptions-item label="画面风格">
+                  <span class="info-value">{{ getStyleLabel(drama?.style) }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="参考作品">
+                  <span class="info-value">{{ drama?.reference_work || '无' }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="画面比例">
+                  <span class="info-value">{{ drama?.aspect_ratio || '16:9' }}</span>
+                </el-descriptions-item>
                 <el-descriptions-item
                   :label="$t('drama.management.projectDesc')"
                   :span="2"
@@ -233,10 +242,15 @@
               >
                 <el-card shadow="hover" class="character-card">
                   <div class="character-preview">
-                    <img
+                    <el-image
                       v-if="character.image_url"
                       :src="fixImageUrl(character.image_url)"
+                      :preview-src-list="[fixImageUrl(character.image_url)]"
+                      fit="cover"
                       :alt="character.name"
+                      :preview-teleported="true"
+                      hide-on-click-modal
+                      style="width: 100%; height: 100%;"
                     />
                     <el-avatar v-else :size="120">{{
                       character.name[0]
@@ -782,6 +796,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ArrowLeft,
@@ -797,8 +812,29 @@ import { propAPI } from "@/api/prop";
 import type { Drama } from "@/types/drama";
 import { AppHeader, StatCard, EmptyState } from "@/components/common";
 
+const styleLabelMap: Record<string, string> = {
+  'Cel-shaded Anime': '赛璐璐日漫',
+  'Makoto Shinkai Style': '新海诚电影风格',
+  'Studio Ghibli Style': '吉卜力/宫崎骏风格',
+  'American Animation Style': '欧美动画风格',
+  'Chinese Animation Style': '国漫风格',
+  'Shanghai Ink Animation': '上美水墨动画风',
+  'Impasto Fantasy Style': '厚涂幻想风',
+  'Magical Girl Style': '魔法少女风格',
+  'Sci-Fi Cyberpunk Style': '科幻赛博朋克风格',
+  'Chibi Style': 'Q版风格',
+  'Light Novel Cover Style': '轻小说封面插画风',
+  'realistic': '写实风格 (Realistic)'
+}
+
+const getStyleLabel = (style: string | undefined) => {
+  if (!style) return '默认 (Realistic)'
+  return styleLabelMap[style] || style
+}
+
 const router = useRouter();
 const route = useRoute();
+const { t } = useI18n();
 
 const drama = ref<Drama>();
 const activeTab = ref((route.query.tab as string) || "overview");
@@ -1036,7 +1072,15 @@ const beforeAvatarUpload = (file: any) => {
 
 const generateCharacterImage = async (character: any) => {
   try {
-    await characterLibraryAPI.generateCharacterImage(character.id);
+    const style = drama.value?.style;
+    const referenceWork = drama.value?.reference_work;
+    await characterLibraryAPI.generateCharacterImage(
+      character.id,
+      undefined,
+      style,
+      undefined,
+      referenceWork,
+    );
     ElMessage.success("图片生成任务已提交");
     startPolling(loadDramaData);
   } catch (error: any) {
@@ -1047,7 +1091,7 @@ const generateCharacterImage = async (character: any) => {
 const openExtractCharacterDialog = () => {
   extractCharactersDialogVisible.value = true;
   if (sortedEpisodes.value.length > 0 && !selectedExtractEpisodeId.value) {
-    selectedExtractEpisodeId.value = sortedEpisodes.value[0].id;
+    selectedExtractEpisodeId.value = parseInt(sortedEpisodes.value[0].id);
   }
 };
 
@@ -1085,7 +1129,7 @@ const generateSceneImage = async (scene: any) => {
 const openExtractSceneDialog = () => {
   extractScenesDialogVisible.value = true;
   if (sortedEpisodes.value.length > 0 && !selectedExtractEpisodeId.value) {
-    selectedExtractEpisodeId.value = sortedEpisodes.value[0].id;
+    selectedExtractEpisodeId.value = parseInt(sortedEpisodes.value[0].id);
   }
 };
 
@@ -1257,7 +1301,7 @@ const saveScene = async () => {
     } else {
       // Create new scene
       await dramaAPI.createScene({
-        drama_id: drama.value!.id,
+        drama_id: parseInt(drama.value!.id),
         location: newScene.value.location,
         prompt: newScene.value.prompt, // Create uses prompt
         description: newScene.value.prompt, // Sync description too
@@ -1413,7 +1457,7 @@ const handlePropImageSuccess = (response: any) => {
 const openExtractDialog = () => {
   extractPropsDialogVisible.value = true;
   if (sortedEpisodes.value.length > 0 && !selectedExtractEpisodeId.value) {
-    selectedExtractEpisodeId.value = sortedEpisodes.value[0].id;
+    selectedExtractEpisodeId.value = parseInt(sortedEpisodes.value[0].id);
   }
 };
 

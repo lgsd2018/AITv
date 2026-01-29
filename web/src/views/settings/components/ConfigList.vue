@@ -24,7 +24,7 @@
           <el-button 
             text 
             :type="config.is_active ? 'warning' : 'success'"
-            @click="$emit('toggle-active', config)"
+            @click="$emit('toggleActive', config)"
           >
             {{ config.is_active ? $t('aiConfig.disable') : $t('aiConfig.enable') }}
           </el-button>

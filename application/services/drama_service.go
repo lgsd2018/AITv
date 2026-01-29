@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/drama-generator/backend/domain/models"
@@ -45,6 +46,7 @@ type UpdateDramaRequest struct {
 	Status         string `json:"status" binding:"omitempty,oneof=draft planning production completed archived"`
 	Style          string `json:"style"`
 	StylePrompt    string `json:"style_prompt"`
+	ReferenceWork  string `json:"reference_work"`
 	AspectRatio    string `json:"aspect_ratio"`
 	ReferenceImage string `json:"reference_image"`
 }
@@ -58,6 +60,8 @@ type DramaListQuery struct {
 }
 
 func (s *DramaService) CreateDrama(req *CreateDramaRequest) (*models.Drama, error) {
+	s.log.Infow("Creating drama", "req", req)
+
 	drama := &models.Drama{
 		Title:  req.Title,
 		Status: "draft",
@@ -69,14 +73,26 @@ func (s *DramaService) CreateDrama(req *CreateDramaRequest) (*models.Drama, erro
 	if req.Genre != "" {
 		drama.Genre = &req.Genre
 	}
-	if req.Style != "" {
-		drama.Style = req.Style
+	style := strings.TrimSpace(req.Style)
+	if style != "" {
+		if len(style) > 50 {
+			return nil, errors.New("style is too long")
+		}
+		drama.Style = style
+	} else {
+		s.log.Warnw("CreateDrama: Style is empty", "req", req)
 	}
 	if req.StylePrompt != "" {
 		drama.StylePrompt = &req.StylePrompt
 	}
-	if req.ReferenceWork != "" {
-		drama.ReferenceWork = &req.ReferenceWork
+	referenceWork := strings.TrimSpace(req.ReferenceWork)
+	if referenceWork != "" {
+		if len(referenceWork) > 200 {
+			return nil, errors.New("reference work is too long")
+		}
+		drama.ReferenceWork = &referenceWork
+	} else {
+		s.log.Warnw("CreateDrama: ReferenceWork is empty", "req", req)
 	}
 	if req.AspectRatio != "" {
 		drama.AspectRatio = req.AspectRatio
@@ -282,7 +298,11 @@ func (s *DramaService) UpdateDrama(dramaID string, req *UpdateDramaRequest) (*mo
 	updates := make(map[string]interface{})
 
 	if req.Title != "" {
-		updates["title"] = req.Title
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			return nil, errors.New("title cannot be empty")
+		}
+		updates["title"] = title
 	}
 	if req.Description != "" {
 		updates["description"] = req.Description
@@ -291,10 +311,25 @@ func (s *DramaService) UpdateDrama(dramaID string, req *UpdateDramaRequest) (*mo
 		updates["genre"] = req.Genre
 	}
 	if req.Style != "" {
-		updates["style"] = req.Style
+		style := strings.TrimSpace(req.Style)
+		if style != "" {
+			if len(style) > 50 {
+				return nil, errors.New("style is too long")
+			}
+			updates["style"] = style
+		}
 	}
 	if req.StylePrompt != "" {
 		updates["style_prompt"] = req.StylePrompt
+	}
+	if req.ReferenceWork != "" {
+		referenceWork := strings.TrimSpace(req.ReferenceWork)
+		if referenceWork != "" {
+			if len(referenceWork) > 200 {
+				return nil, errors.New("reference work is too long")
+			}
+			updates["reference_work"] = referenceWork
+		}
 	}
 	if req.AspectRatio != "" {
 		updates["aspect_ratio"] = req.AspectRatio

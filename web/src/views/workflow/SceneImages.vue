@@ -74,7 +74,7 @@ const dramaId = route.params.id as string
 
 const episodes = ref<Episode[]>([])
 const activeEpisode = ref<string>()
-const generatingId = ref<string>()
+const generatingId = ref<number>()
 
 const allImagesGenerated = computed(() => {
   return episodes.value.every(ep => 

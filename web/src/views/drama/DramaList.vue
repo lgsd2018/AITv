@@ -63,14 +63,23 @@
           
           <el-form-item label="画面风格">
             <el-select v-model="editForm.style" placeholder="请选择画面风格" style="width: 100%">
+              <el-option label="赛璐璐日漫" value="Cel-shaded Anime" />
+              <el-option label="新海诚电影风格" value="Makoto Shinkai Style" />
+              <el-option label="吉卜力/宫崎骏风格" value="Studio Ghibli Style" />
+              <el-option label="欧美动画风格" value="American Animation Style" />
+              <el-option label="国漫风格" value="Chinese Animation Style" />
+              <el-option label="上美水墨动画风" value="Shanghai Ink Animation" />
+              <el-option label="厚涂幻想风" value="Impasto Fantasy Style" />
+              <el-option label="魔法少女风格" value="Magical Girl Style" />
+              <el-option label="科幻赛博朋克风格" value="Sci-Fi Cyberpunk Style" />
+              <el-option label="Q版风格" value="Chibi Style" />
+              <el-option label="轻小说封面插画风" value="Light Novel Cover Style" />
               <el-option label="写实风格 (Realistic)" value="realistic" />
-              <el-option label="二次元/动漫 (Anime)" value="anime" />
-              <el-option label="3D渲染 (3D Render)" value="3d-render" />
-              <el-option label="赛博朋克 (Cyberpunk)" value="cyberpunk" />
-              <el-option label="水彩画 (Watercolor)" value="watercolor" />
-              <el-option label="油画 (Oil Painting)" value="oil-painting" />
-              <el-option label="电影质感 (Cinematic)" value="cinematic" />
             </el-select>
+          </el-form-item>
+
+          <el-form-item label="参考作品">
+            <el-input v-model="editForm.reference_work" placeholder="例如：《七龙珠》、《宫崎骏动画》等" clearable />
           </el-form-item>
 
           <el-form-item label="风格参考图 (URL)">
@@ -171,7 +180,10 @@ const editLoading = ref(false)
 const editForm = ref({
   id: '',
   title: '',
-  description: ''
+  description: '',
+  style: '',
+  reference_work: '',
+  reference_image: ''
 })
 
 // Open edit dialog / 打开编辑对话框
@@ -183,7 +195,10 @@ const editDrama = async (id: string) => {
     editForm.value = {
       id: drama.id,
       title: drama.title,
-      description: drama.description || ''
+      description: drama.description || '',
+      style: drama.style || '',
+      reference_work: drama.reference_work || '',
+      reference_image: drama.reference_image || ''
     }
   } catch (error: any) {
     ElMessage.error(error.message || '加载失败')
@@ -195,16 +210,23 @@ const editDrama = async (id: string) => {
 
 // Save edit changes / 保存编辑更改
 const saveEdit = async () => {
-  if (!editForm.value.title) {
+  if (!editForm.value.title || !editForm.value.title.trim()) {
     ElMessage.warning('请输入项目名称')
+    return
+  }
+  if (!editForm.value.style || !editForm.value.style.trim()) {
+    ElMessage.warning('请选择画面风格')
     return
   }
 
   editLoading.value = true
   try {
     await dramaAPI.update(editForm.value.id, {
-      title: editForm.value.title,
-      description: editForm.value.description
+      title: editForm.value.title.trim(),
+      description: editForm.value.description,
+      style: editForm.value.style,
+      reference_work: editForm.value.reference_work?.trim(),
+      reference_image: editForm.value.reference_image
     })
     ElMessage.success('保存成功')
     editDialogVisible.value = false

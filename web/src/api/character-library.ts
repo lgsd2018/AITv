@@ -78,9 +78,13 @@ export const characterLibraryAPI = {
   },
 
   // AI生成角色形象
-  generateCharacterImage(characterId: string, model?: string) {
-    return request.post<{ image_url: string }>(`/characters/${characterId}/generate-image`, {
-      model
+  generateCharacterImage(characterId: string, model?: string, style?: string, size?: string, referenceWork?: string, whiteBackground?: boolean) {
+    return request.post<{ image_generation: { id: number } }>(`/characters/${characterId}/generate-image`, {
+      model,
+      style,
+      size,
+      reference_work: referenceWork,
+      white_background: whiteBackground
     })
   },
 

@@ -95,7 +95,7 @@ export const dramaAPI = {
     return request.get(`/episodes/${episodeId}/storyboards`)
   },
 
-  updateStoryboard(storyboardId: string, data: any) {
+  updateStoryboard(storyboardId: string | number, data: any) {
     return request.put(`/storyboards/${storyboardId}`, data)
   },
 

@@ -1,7 +1,7 @@
 export interface ImageGeneration {
   id: number
   storyboard_id?: number
-  scene_id?: string
+  scene_id?: number
   drama_id: string
   character_id?: number
   image_type?: string
@@ -56,7 +56,7 @@ export interface GenerateImageRequest {
 
 export interface ImageGenerationListParams {
   drama_id?: string
-  scene_id?: string
+  scene_id?: number
   storyboard_id?: number
   frame_type?: string
   status?: ImageStatus

@@ -75,8 +75,8 @@ export interface Episode {
 }
 
 export interface Storyboard {
-  id: string
-  episode_id: string
+  id: number
+  episode_id: number
   storyboard_number: number
   title?: string
   description?: string
@@ -88,11 +88,12 @@ export interface Storyboard {
   atmosphere?: string
   image_prompt?: string
   video_prompt?: string
+  background_id?: number | string
   characters?: any
   image_url?: string
   video_url?: string
   composed_image?: string
-  scene_id?: string
+  scene_id?: number
   scene?: Scene
   created_at: string
   updated_at: string
@@ -100,7 +101,7 @@ export interface Storyboard {
 }
 
 export interface Scene {
-  id: string
+  id: number
   drama_id: string
   location: string
   time: string

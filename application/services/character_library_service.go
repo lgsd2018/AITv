@@ -292,7 +292,7 @@ func (s *CharacterLibraryService) DeleteCharacter(characterID uint) error {
 }
 
 // GenerateCharacterImage AI生成角色形象
-func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, imageService *ImageGenerationService, modelName string, style string) (*models.ImageGeneration, error) {
+func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, imageService *ImageGenerationService, modelName string, style string, size string, referenceWork string, whiteBackground bool) (*models.ImageGeneration, error) {
 	// 查找角色
 	var character models.Character
 	if err := s.db.Where("id = ?", characterID).First(&character).Error; err != nil {
@@ -327,12 +327,30 @@ func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, ima
 	prompt += s.config.Style.DefaultRoleStyle
 	prompt += s.config.Style.DefaultRoleRatio
 
-	// [New] 强制添加三视图、白底等提示词，确保角色生成的一致性
-	prompt += ", character sheet, three views (front view, side view, back view), white background, full body shot, high quality, 8k resolution"
+	// 处理白底图 (White Background)
+	if whiteBackground {
+		whiteBgKeywords := []string{"white background", "simple background", "studio lighting"}
+		for _, kw := range whiteBgKeywords {
+			if !strings.Contains(strings.ToLower(prompt), kw) {
+				prompt += ", " + kw
+			}
+		}
+		// 可以考虑添加负面提示词，但这通常在ImageService层处理或通过NegativePrompt字段传递
+		// 这里我们假设ImageService会处理通用的负面提示词
+	}
 
-	// 如果Drama设置了风格，也添加到Prompt中
-	if drama.Style != "" && drama.Style != "realistic" { // realistic是默认值，通常不需要显式添加，或者根据需求添加
-		prompt += ", " + drama.Style + " style"
+	// Apply Style
+	// 优先使用传入的style参数，如果没有则使用Drama的全局风格
+	effectiveStyle := drama.Style
+	if style != "" {
+		effectiveStyle = style
+	}
+	
+	if effectiveStyle != "" && effectiveStyle != "realistic" { // realistic是默认值，通常不需要显式添加
+		stylePrompt := effectiveStyle + " style"
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(effectiveStyle)) {
+			prompt += ", " + stylePrompt
+		}
 	}
 
 	// Apply StylePrompt
@@ -343,13 +361,33 @@ func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, ima
 	}
 
 	// Apply ReferenceWork
-	if drama.ReferenceWork != nil && *drama.ReferenceWork != "" {
-		refPrompt := "style reference: " + *drama.ReferenceWork
+	// 优先使用传入的referenceWork参数，如果没有则使用Drama的ReferenceWork
+	effectiveRefWork := ""
+	if drama.ReferenceWork != nil {
+		effectiveRefWork = *drama.ReferenceWork
+	}
+	if referenceWork != "" {
+		effectiveRefWork = referenceWork
+	}
+
+	if effectiveRefWork != "" {
+		refPrompt := "style reference: " + effectiveRefWork
 		if !strings.Contains(prompt, refPrompt) {
 			prompt += ", " + refPrompt
 		}
 	}
 	
+	// Determine size based on AspectRatio
+	effectiveSize := "2560x1440" // Default 16:9
+	if drama.AspectRatio == "9:16" {
+		effectiveSize = "1440x2560" // Portrait
+	}
+	
+	// 如果传入了size参数，则使用传入的size
+	if size != "" {
+		effectiveSize = size
+	}
+
 	// 调用图片生成服务
 	dramaIDStr := fmt.Sprintf("%d", character.DramaID)
 	imageType := "character"
@@ -360,8 +398,14 @@ func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, ima
 		Prompt:      prompt,
 		Provider:    "openai",    // 或从配置读取
 		Model:       modelName,   // 使用用户指定的模型
-		Size:        "2560x1440", // 3,686,400像素，满足API最低要求（16:9比例）
+		Size:        effectiveSize,
 		Quality:     "standard",
+	}
+
+	// 如果启用了白底图，可以增强负面提示词
+	if whiteBackground {
+		neg := "dark background, complex background, patterned background, shadows, noise, gray background, black background, gradient background, scenery, landscape, objects, props, furniture, text, watermark, signature, logo"
+		req.NegativePrompt = &neg
 	}
 
 	imageGen, err := imageService.GenerateImage(req)
@@ -485,23 +529,33 @@ func (s *CharacterLibraryService) BatchGenerateCharacterImages(characterIDs []st
 		"count", len(characterIDs),
 		"model", modelName)
 
-	// 使用 goroutine 并发生成所有角色图片
-	for _, characterID := range characterIDs {
-		// 为每个角色启动单独的 goroutine
-		go func(charID string) {
-			imageGen, err := s.GenerateCharacterImage(charID, imageService, modelName, "") // 批量生成暂不支持自定义风格，使用默认值
-			if err != nil {
-				s.log.Errorw("Failed to generate character image in batch",
-					"character_id", charID,
-					"error", err)
-				return
-			}
+	// 启动goroutine处理批量任务
+	go func() {
+		// 限制并发数
+		concurrency := 3
+		sem := make(chan struct{}, concurrency)
 
-			s.log.Infow("Character image generated in batch",
-				"character_id", charID,
-				"image_gen_id", imageGen.ID)
-		}(characterID)
-	}
+		for _, charID := range characterIDs {
+			sem <- struct{}{} // Acquire semaphore
+
+			go func(characterID string) {
+				defer func() { <-sem }() // Release semaphore
+
+				// 批量生成暂不支持自定义参数，使用空值（即使用默认/Drama配置）
+				imageGen, err := s.GenerateCharacterImage(characterID, imageService, modelName, "", "", "", false)
+				if err != nil {
+					s.log.Errorw("Failed to generate character image in batch",
+						"character_id", characterID,
+						"error", err)
+					return
+				}
+
+				s.log.Infow("Character image generated in batch",
+					"character_id", characterID,
+					"image_gen_id", imageGen.ID)
+			}(charID)
+		}
+	}()
 
 	s.log.Infow("Batch character image generation tasks submitted",
 		"total", len(characterIDs))

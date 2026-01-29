@@ -75,13 +75,14 @@ import { ElMessage } from 'element-plus'
 import { Edit, Picture } from '@element-plus/icons-vue'
 import { dramaAPI } from '@/api/drama'
 import { characterLibraryAPI } from '@/api/character-library'
-import type { Character } from '@/types/drama'
+import type { Character, Drama } from '@/types/drama'
 
 const route = useRoute()
 const router = useRouter()
 const dramaId = route.params.id as string
 
 const characters = ref<Character[]>([])
+const dramaInfo = ref<Drama | null>(null)
 const generatingIds = ref<(number | string)[]>([])
 const batchGenerating = ref(false)
 const selectedCharacters = ref<(number | string)[]>([])
@@ -135,12 +136,19 @@ const generateImage = async (character: Character) => {
   
   generatingIds.value.push(character.id)
   try {
-    const result = await characterLibraryAPI.generateCharacterImage(character.id as string)
-    
-    // 更新角色图片
-    const index = characters.value.findIndex(c => c.id === character.id)
-    if (index !== -1) {
-      characters.value[index].image_url = result.image_url
+    const style = dramaInfo.value?.style
+    const referenceWork = dramaInfo.value?.reference_work
+    await characterLibraryAPI.generateCharacterImage(
+      String(character.id),
+      undefined,
+      style,
+      undefined,
+      referenceWork
+    )
+    const drama = await dramaAPI.get(dramaId)
+    dramaInfo.value = drama
+    if (drama.characters) {
+      characters.value = drama.characters
     }
     
     ElMessage.success(`${character.name}的形象生成成功`)
@@ -192,6 +200,7 @@ const startPolling = () => {
   pollingTimer = window.setInterval(async () => {
     try {
       const drama = await dramaAPI.get(dramaId)
+      dramaInfo.value = drama
       if (drama.characters) {
         // 更新角色列表
         characters.value = drama.characters
@@ -231,6 +240,7 @@ const goToNextStep = () => {
 onMounted(async () => {
   try {
     const drama = await dramaAPI.get(dramaId)
+    dramaInfo.value = drama
     if (drama.characters && drama.characters.length > 0) {
       characters.value = drama.characters
     } else {

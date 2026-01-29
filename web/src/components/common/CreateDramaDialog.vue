@@ -349,6 +349,7 @@ const handleSubmit = async () => {
   
   try {
     await formRef.value.validate()
+    console.log('Submitting drama form:', JSON.parse(JSON.stringify(form)))
     loading.value = true
     try {
       const drama = await dramaAPI.create(form)
