@@ -76,6 +76,7 @@ export interface UpdateAssetRequest {
 
 export interface ListAssetsParams {
   drama_id?: string
+  include_shared?: boolean
   episode_id?: number
   storyboard_id?: number
   type?: 'image' | 'video' | 'audio'

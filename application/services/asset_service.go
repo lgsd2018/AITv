@@ -56,6 +56,7 @@ type UpdateAssetRequest struct {
 
 type ListAssetsRequest struct {
 	DramaID      *string           `json:"drama_id"`
+	IncludeShared bool             `json:"include_shared"`
 	EpisodeID    *uint             `json:"episode_id"`
 	StoryboardID *uint             `json:"storyboard_id"`
 	Type         *models.AssetType `json:"type"`
@@ -160,7 +161,7 @@ func (s *AssetService) GetAsset(assetID uint) (*models.Asset, error) {
 func (s *AssetService) ListAssets(req *ListAssetsRequest) ([]models.Asset, int64, error) {
 	query := s.db.Model(&models.Asset{})
 
-	if req.DramaID != nil {
+	if req.DramaID != nil && !req.IncludeShared {
 		var dramaID uint64
 		dramaID, _ = strconv.ParseUint(*req.DramaID, 10, 32)
 		query = query.Where("drama_id = ?", uint(dramaID))

@@ -90,6 +90,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB, log *logger.Logger, localStora
 		ai := api.Group("/ai")
 		{
 			ai.POST("/reverse-prompt", aiHandler.GeneratePromptFromImage)
+			ai.POST("/optimize-prompt", aiHandler.OptimizePrompt)
 		}
 
 		generation := api.Group("/generation")
@@ -125,6 +126,10 @@ func SetupRouter(cfg *config.Config, db *gorm.DB, log *logger.Logger, localStora
 			props.PUT("/:id", propHandler.UpdateProp)
 			props.DELETE("/:id", propHandler.DeleteProp)
 			props.POST("/:id/generate", propHandler.GenerateImage)
+			props.GET("/library", propHandler.ListPropLibrary)
+			props.POST("/library", propHandler.AddPropToLibrary)
+			props.PUT("/library/:id", propHandler.UpdatePropLibrary)
+			props.DELETE("/library/:id", propHandler.DeletePropLibrary)
 		}
 
 		// 文件上传路由
@@ -140,6 +145,7 @@ func SetupRouter(cfg *config.Config, db *gorm.DB, log *logger.Logger, localStora
 			episodes.POST("/:episode_id/storyboards", storyboardHandler.GenerateStoryboard)
 			episodes.POST("/:episode_id/props/extract", propHandler.ExtractProps)
 			episodes.POST("/:episode_id/characters/extract", characterLibraryHandler.ExtractCharacters)
+			episodes.GET("/:episode_id/props", propHandler.ListEpisodeProps)
 			episodes.GET("/:episode_id/storyboards", sceneHandler.GetStoryboardsForEpisode)
 			episodes.POST("/:episode_id/finalize", dramaHandler.FinalizeEpisode)
 			episodes.GET("/:episode_id/download", dramaHandler.DownloadEpisodeVideo)

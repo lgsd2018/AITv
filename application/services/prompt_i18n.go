@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/drama-generator/backend/pkg/config"
 )
@@ -612,4 +613,66 @@ func (p *PromptI18n) FormatUserPrompt(key string, args ...interface{}) string {
 		return fmt.Sprintf(template, args...)
 	}
 	return template
+}
+
+func shouldNormalizeByProjectStyle(style string, referenceWork string) bool {
+	return strings.TrimSpace(style) != "" || strings.TrimSpace(referenceWork) != ""
+}
+
+func normalizePromptByStyle(prompt string, style string, referenceWork string) string {
+	if strings.TrimSpace(prompt) == "" {
+		return prompt
+	}
+	if !shouldNormalizeByProjectStyle(style, referenceWork) {
+		return prompt
+	}
+
+	replacer := strings.NewReplacer("，", ",", "\n", ",", "、", ",")
+	normalized := replacer.Replace(prompt)
+	segments := strings.Split(normalized, ",")
+
+	targetStyle := strings.TrimSpace(style)
+
+	result := make([]string, 0, len(segments))
+	seen := map[string]struct{}{}
+	hasStyle := false
+	hasReference := false
+
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		lower := strings.ToLower(seg)
+		if referenceWork != "" {
+			if strings.Contains(lower, "style reference") ||
+				strings.Contains(lower, "参考作品") ||
+				strings.Contains(lower, "reference work") ||
+				strings.Contains(lower, strings.ToLower(referenceWork)) {
+				seg = "style reference: " + referenceWork
+				lower = strings.ToLower(seg)
+				hasReference = true
+			}
+		}
+
+		if targetStyle != "" && strings.Contains(lower, strings.ToLower(targetStyle)) {
+			hasStyle = true
+		}
+
+		normalizedKey := strings.ToLower(seg)
+		if _, exists := seen[normalizedKey]; exists {
+			continue
+		}
+		seen[normalizedKey] = struct{}{}
+		result = append(result, seg)
+	}
+
+	if referenceWork != "" && !hasReference {
+		result = append(result, "style reference: "+referenceWork)
+	}
+	if targetStyle != "" && !hasStyle {
+		result = append(result, targetStyle)
+	}
+
+	return strings.Join(result, ", ")
 }

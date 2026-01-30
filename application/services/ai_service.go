@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,8 +19,8 @@ import (
 )
 
 type AIService struct {
-	db          *gorm.DB
-	log         *logger.Logger
+	db               *gorm.DB
+	log              *logger.Logger
 	localStoragePath string
 	baseURL          string
 }
@@ -31,6 +32,10 @@ func NewAIService(db *gorm.DB, log *logger.Logger, cfg *config.Config) *AIServic
 		localStoragePath: cfg.Storage.LocalPath,
 		baseURL:          cfg.Storage.BaseURL,
 	}
+}
+
+func (s *AIService) GetDB() *gorm.DB {
+	return s.db
 }
 
 type CreateAIConfigRequest struct {
@@ -158,6 +163,9 @@ func (s *AIService) GetConfig(configID uint) (*models.AIServiceConfig, error) {
 }
 
 func (s *AIService) ListConfigs(serviceType string) ([]models.AIServiceConfig, error) {
+	if s.db == nil {
+		return nil, errors.New("database connection is nil")
+	}
 	var configs []models.AIServiceConfig
 	query := s.db
 
@@ -371,6 +379,65 @@ func (s *AIService) GetConfigForModel(serviceType string, modelName string) (*mo
 	return nil, errors.New("no active config found for model: " + modelName)
 }
 
+func (s *AIService) getActiveConfigs(serviceType string) ([]models.AIServiceConfig, error) {
+	var configs []models.AIServiceConfig
+	err := s.db.Where("service_type = ? AND is_active = ?", serviceType, true).
+		Order("priority DESC, created_at DESC").
+		Find(&configs).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(configs) == 0 {
+		return nil, errors.New("no active config found")
+	}
+	return configs, nil
+}
+
+func (s *AIService) buildTextClientFromConfig(config *models.AIServiceConfig, modelName string) ai.AIClient {
+	model := modelName
+	if model == "" && len(config.Model) > 0 {
+		model = config.Model[0]
+	}
+
+	endpoint := config.Endpoint
+	if endpoint == "" {
+		switch config.Provider {
+		case "gemini", "google":
+			endpoint = "/v1beta/models/{model}:generateContent"
+		default:
+			endpoint = "/chat/completions"
+		}
+	}
+
+	switch config.Provider {
+	case "gemini", "google":
+		return ai.NewGeminiClient(config.BaseURL, config.APIKey, model, endpoint)
+	default:
+		return ai.NewOpenAIClient(config.BaseURL, config.APIKey, model, endpoint)
+	}
+}
+
+func isRetryableAIError(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "dial tcp") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "tls") ||
+		strings.Contains(msg, "eof") {
+		return true
+	}
+	return false
+}
+
 func (s *AIService) GetAIClient(serviceType string) (ai.AIClient, error) {
 	config, err := s.GetDefaultConfig(serviceType)
 	if err != nil {
@@ -433,12 +500,48 @@ func (s *AIService) GetAIClientForModel(serviceType string, modelName string) (a
 }
 
 func (s *AIService) GenerateText(prompt string, systemPrompt string, options ...func(*ai.ChatCompletionRequest)) (string, error) {
-	client, err := s.GetAIClient("text")
+	configs, err := s.getActiveConfigs("text")
 	if err != nil {
 		return "", fmt.Errorf("failed to get AI client: %w", err)
 	}
 
-	return client.GenerateText(prompt, systemPrompt, options...)
+	var lastErr error
+	for index := range configs {
+		config := configs[index]
+		client := s.buildTextClientFromConfig(&config, "")
+		text, callErr := client.GenerateText(prompt, systemPrompt, options...)
+		if callErr == nil {
+			return text, nil
+		}
+		lastErr = callErr
+		if !isRetryableAIError(callErr) {
+			return "", callErr
+		}
+		if index < len(configs)-1 {
+			s.log.Warnw("AI generate failed, trying next config", "error", callErr, "config_id", config.ID, "provider", config.Provider)
+		}
+	}
+
+	return "", lastErr
+}
+
+func (s *AIService) OptimizeImagePrompt(prompt string, protected []string) (string, error) {
+	if strings.TrimSpace(prompt) == "" {
+		return "", errors.New("prompt is empty")
+	}
+
+	systemPrompt := "你是一名专业的图像生成提示词优化专家。请在不改变核心语义的前提下，显著提升提示词的清晰度、细节层次、光影质感与构图表达。要求：1) 保持输入语言风格不变 2) 保留原有的重点信息 3) 禁止输出解释或Markdown 4) 只输出优化后的提示词文本。"
+	if len(protected) > 0 {
+		systemPrompt = fmt.Sprintf("%s 必须原样保留并包含以下关键词或短语：%s。", systemPrompt, strings.Join(protected, "、"))
+	}
+
+	userPrompt := fmt.Sprintf("原始提示词：%s", prompt)
+	text, err := s.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(0.7), ai.WithMaxTokens(800))
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(text), nil
 }
 
 func (s *AIService) GenerateImage(prompt string, size string, n int) ([]string, error) {
@@ -473,7 +576,7 @@ func (s *AIService) GeneratePromptFromImage(imageURL string) (string, error) {
 		if strings.HasPrefix(imageURL, "/static/") {
 			relPath := strings.TrimPrefix(imageURL, "/static/")
 			localPath := filepath.Join(s.localStoragePath, relPath)
-			
+
 			f, err := os.Open(localPath)
 			if err == nil {
 				defer f.Close()

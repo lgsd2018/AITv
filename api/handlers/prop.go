@@ -4,7 +4,6 @@ import (
 	"strconv"
 
 	"github.com/drama-generator/backend/application/services"
-	"github.com/drama-generator/backend/domain/models"
 	"github.com/drama-generator/backend/pkg/config"
 	"github.com/drama-generator/backend/pkg/logger"
 	"github.com/drama-generator/backend/pkg/response"
@@ -17,6 +16,12 @@ type PropHandler struct {
 	log         *logger.Logger
 }
 
+type propLibraryRequest struct {
+	PropID     uint   `json:"prop_id" binding:"required"`
+	UserID     uint   `json:"user_id" binding:"required"`
+	Permission string `json:"permission"`
+}
+
 func NewPropHandler(db *gorm.DB, cfg *config.Config, log *logger.Logger, aiService *services.AIService, imageGenerationService *services.ImageGenerationService) *PropHandler {
 	return &PropHandler{
 		propService: services.NewPropService(db, aiService, services.NewTaskService(db, log), imageGenerationService, log, cfg),
@@ -26,7 +31,10 @@ func NewPropHandler(db *gorm.DB, cfg *config.Config, log *logger.Logger, aiServi
 
 // ListProps 获取道具列表
 func (h *PropHandler) ListProps(c *gin.Context) {
-	dramaIDStr := c.Query("drama_id")
+	dramaIDStr := c.Param("id")
+	if dramaIDStr == "" {
+		dramaIDStr = c.Query("drama_id")
+	}
 	if dramaIDStr == "" {
 		response.BadRequest(c, "drama_id is required")
 		return
@@ -47,15 +55,41 @@ func (h *PropHandler) ListProps(c *gin.Context) {
 	response.Success(c, props)
 }
 
+func (h *PropHandler) ListEpisodeProps(c *gin.Context) {
+	episodeIDStr := c.Param("episode_id")
+	if episodeIDStr == "" {
+		episodeIDStr = c.Query("episode_id")
+	}
+	if episodeIDStr == "" {
+		response.BadRequest(c, "episode_id is required")
+		return
+	}
+
+	episodeID, err := strconv.ParseUint(episodeIDStr, 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid episode_id")
+		return
+	}
+
+	props, err := h.propService.ListEpisodeProps(uint(episodeID))
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.Success(c, props)
+}
+
 // CreateProp 创建道具
 func (h *PropHandler) CreateProp(c *gin.Context) {
-	var prop models.Prop
-	if err := c.ShouldBindJSON(&prop); err != nil {
+	var req services.PropUpsertRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
-	if err := h.propService.CreateProp(&prop); err != nil {
+	prop, err := h.propService.CreatePropWithRelations(&req)
+	if err != nil {
 		response.InternalError(c, err.Error())
 		return
 	}
@@ -72,18 +106,19 @@ func (h *PropHandler) UpdateProp(c *gin.Context) {
 		return
 	}
 
-	var updates map[string]interface{}
-	if err := c.ShouldBindJSON(&updates); err != nil {
+	var req services.PropUpsertRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
-	if err := h.propService.UpdateProp(uint(id), updates); err != nil {
+	prop, err := h.propService.UpdatePropWithRelations(uint(id), &req)
+	if err != nil {
 		response.InternalError(c, err.Error())
 		return
 	}
 
-	response.Success(c, nil)
+	response.Success(c, prop)
 }
 
 // DeleteProp 删除道具
@@ -158,6 +193,83 @@ func (h *PropHandler) AssociateProps(c *gin.Context) {
 	}
 
 	if err := h.propService.AssociatePropsWithStoryboard(uint(storyboardID), req.PropIDs); err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.Success(c, nil)
+}
+
+func (h *PropHandler) AddPropToLibrary(c *gin.Context) {
+	var req propLibraryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	item, err := h.propService.AddPropToLibrary(req.PropID, req.UserID, req.Permission)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.Created(c, item)
+}
+
+func (h *PropHandler) ListPropLibrary(c *gin.Context) {
+	userIDStr := c.Query("user_id")
+	if userIDStr == "" {
+		response.BadRequest(c, "user_id is required")
+		return
+	}
+	userID, err := strconv.ParseUint(userIDStr, 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	items, err := h.propService.ListPropLibrary(uint(userID))
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.Success(c, items)
+}
+
+func (h *PropHandler) UpdatePropLibrary(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid ID")
+		return
+	}
+
+	var req struct {
+		Permission string `json:"permission"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if err := h.propService.UpdatePropLibraryPermission(uint(id), req.Permission); err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.Success(c, nil)
+}
+
+func (h *PropHandler) DeletePropLibrary(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid ID")
+		return
+	}
+
+	if err := h.propService.RemovePropFromLibrary(uint(id)); err != nil {
 		response.InternalError(c, err.Error())
 		return
 	}

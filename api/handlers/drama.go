@@ -36,9 +36,15 @@ func (h *DramaHandler) CreateDrama(c *gin.Context) {
 		return
 	}
 
+	h.log.Infow("CreateDrama request received", "req", req)
+
 	drama, err := h.dramaService.CreateDrama(&req)
 	if err != nil {
-		response.InternalError(c, "创建失败")
+		if validationErr, ok := services.IsValidationError(err); ok {
+			response.BadRequest(c, validationErr.Message)
+			return
+		}
+		response.InternalError(c, err.Error())
 		return
 	}
 

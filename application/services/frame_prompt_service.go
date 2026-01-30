@@ -18,6 +18,7 @@ type FramePromptService struct {
 	config     *config.Config
 	promptI18n *PromptI18n
 	taskService *TaskService
+	styleConsistencyService *StyleConsistencyService
 }
 
 // NewFramePromptService 创建帧提示词服务
@@ -29,6 +30,7 @@ func NewFramePromptService(db *gorm.DB, cfg *config.Config, log *logger.Logger) 
 		config:     cfg,
 		promptI18n: NewPromptI18n(cfg),
 		taskService: NewTaskService(db, log),
+		styleConsistencyService: NewStyleConsistencyService(cfg, log),
 	}
 }
 
@@ -118,16 +120,21 @@ func (s *FramePromptService) processFramePromptGeneration(taskID string, req Gen
 	// 获取剧集和剧本信息以获取StylePrompt
 	var episode models.Episode
 	var stylePrompt string
+	var targetStyle string
+	var referenceWork string
 	if err := s.db.Preload("Drama").First(&episode, storyboard.EpisodeID).Error; err == nil {
 		// 风格互斥逻辑：优先使用AI反推/自定义的StylePrompt，如果没有则使用预设Style
 		if episode.Drama.StylePrompt != nil && *episode.Drama.StylePrompt != "" {
 			stylePrompt = *episode.Drama.StylePrompt
+			targetStyle = *episode.Drama.StylePrompt
 		} else if episode.Drama.Style != "" && episode.Drama.Style != "realistic" {
 			stylePrompt = episode.Drama.Style
+			targetStyle = episode.Drama.Style
 		}
 
 		// 如果有参考作品，追加到风格提示词
 		if episode.Drama.ReferenceWork != nil && *episode.Drama.ReferenceWork != "" {
+			referenceWork = *episode.Drama.ReferenceWork
 			if stylePrompt != "" {
 				stylePrompt += ", "
 			}
@@ -145,13 +152,22 @@ func (s *FramePromptService) processFramePromptGeneration(taskID string, req Gen
 	switch req.FrameType {
 	case FrameTypeFirst:
 		response.SingleFrame = s.generateFirstFrame(storyboard, scene, model, stylePrompt)
+		if response.SingleFrame != nil {
+			response.SingleFrame.Prompt = s.normalizeFramePrompt(response.SingleFrame.Prompt, storyboard.ID, req.FrameType, targetStyle, referenceWork)
+		}
 		// 保存单帧提示词
 		s.saveFramePrompt(req.StoryboardID, string(req.FrameType), response.SingleFrame.Prompt, response.SingleFrame.Description, "")
 	case FrameTypeKey:
 		response.SingleFrame = s.generateKeyFrame(storyboard, scene, model, stylePrompt)
+		if response.SingleFrame != nil {
+			response.SingleFrame.Prompt = s.normalizeFramePrompt(response.SingleFrame.Prompt, storyboard.ID, req.FrameType, targetStyle, referenceWork)
+		}
 		s.saveFramePrompt(req.StoryboardID, string(req.FrameType), response.SingleFrame.Prompt, response.SingleFrame.Description, "")
 	case FrameTypeLast:
 		response.SingleFrame = s.generateLastFrame(storyboard, scene, model, stylePrompt)
+		if response.SingleFrame != nil {
+			response.SingleFrame.Prompt = s.normalizeFramePrompt(response.SingleFrame.Prompt, storyboard.ID, req.FrameType, targetStyle, referenceWork)
+		}
 		s.saveFramePrompt(req.StoryboardID, string(req.FrameType), response.SingleFrame.Prompt, response.SingleFrame.Description, "")
 	case FrameTypePanel:
 		count := req.PanelCount
@@ -159,6 +175,11 @@ func (s *FramePromptService) processFramePromptGeneration(taskID string, req Gen
 			count = 3
 		}
 		response.MultiFrame = s.generatePanelFrames(storyboard, scene, count, model, stylePrompt)
+		if response.MultiFrame != nil {
+			for index, frame := range response.MultiFrame.Frames {
+				response.MultiFrame.Frames[index].Prompt = s.normalizeFramePrompt(frame.Prompt, storyboard.ID, req.FrameType, targetStyle, referenceWork)
+			}
+		}
 		// 保存多帧提示词（合并为一条记录）
 		var prompts []string
 		for _, frame := range response.MultiFrame.Frames {
@@ -168,6 +189,11 @@ func (s *FramePromptService) processFramePromptGeneration(taskID string, req Gen
 		s.saveFramePrompt(req.StoryboardID, string(req.FrameType), combinedPrompt, "分镜板组合提示词", response.MultiFrame.Layout)
 	case FrameTypeAction:
 		response.MultiFrame = s.generateActionSequence(storyboard, scene, model, stylePrompt)
+		if response.MultiFrame != nil {
+			for index, frame := range response.MultiFrame.Frames {
+				response.MultiFrame.Frames[index].Prompt = s.normalizeFramePrompt(frame.Prompt, storyboard.ID, req.FrameType, targetStyle, referenceWork)
+			}
+		}
 		var prompts []string
 		for _, frame := range response.MultiFrame.Frames {
 			prompts = append(prompts, frame.Prompt)
@@ -188,6 +214,17 @@ func (s *FramePromptService) processFramePromptGeneration(taskID string, req Gen
 	})
 
 	s.log.Infow("Frame prompt generation completed", "task_id", taskID, "storyboard_id", req.StoryboardID, "frame_type", req.FrameType)
+}
+
+func (s *FramePromptService) normalizeFramePrompt(prompt string, storyboardID uint, frameType FrameType, style string, referenceWork string) string {
+	if s.styleConsistencyService == nil {
+		return prompt
+	}
+	normalizedPrompt, violations := s.styleConsistencyService.NormalizeAndValidatePrompt(prompt, style, referenceWork)
+	if len(violations) > 0 {
+		s.log.Infow("Frame prompt normalized by style consistency", "storyboard_id", storyboardID, "frame_type", frameType, "violations", violations)
+	}
+	return normalizedPrompt
 }
 
 // saveFramePrompt 保存帧提示词到数据库

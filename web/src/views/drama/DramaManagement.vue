@@ -656,6 +656,46 @@
               :placeholder="$t('prop.promptPlaceholder')"
             />
           </el-form-item>
+          <el-form-item label="自定义属性">
+            <el-input
+              v-model="newProp.attributes_text"
+              type="textarea"
+              :rows="4"
+              placeholder='JSON格式，如 {"颜色":"红色","材质":"金属"}'
+            />
+          </el-form-item>
+          <el-form-item label="关联角色">
+            <el-select
+              v-model="newProp.character_ids"
+              multiple
+              filterable
+              style="width: 100%"
+              :placeholder="$t('common.pleaseSelect')"
+            >
+              <el-option
+                v-for="char in drama?.characters || []"
+                :key="char.id"
+                :label="char.name"
+                :value="char.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联场景">
+            <el-select
+              v-model="newProp.scene_ids"
+              multiple
+              filterable
+              style="width: 100%"
+              :placeholder="$t('common.pleaseSelect')"
+            >
+              <el-option
+                v-for="scene in scenes"
+                :key="scene.id"
+                :label="`${scene.location || scene.name || '-'} · ${scene.time || ''}`"
+                :value="scene.id"
+              />
+            </el-select>
+          </el-form-item>
         </el-form>
         <template #footer>
           <el-button @click="addPropDialogVisible = false">{{
@@ -869,6 +909,9 @@ const newProp = ref({
   prompt: "",
   type: "",
   image_url: "",
+  attributes_text: "",
+  character_ids: [] as number[],
+  scene_ids: [] as number[],
 });
 
 const newScene = ref({
@@ -917,6 +960,7 @@ onUnmounted(() => {
 const loadDramaData = async () => {
   try {
     const data = await dramaAPI.get(route.params.id as string);
+    console.log('DramaManagement loaded drama:', data);
     drama.value = data;
     loadScenes();
   } catch (error: any) {
@@ -1363,8 +1407,16 @@ const openAddPropDialog = () => {
     prompt: "",
     type: "",
     image_url: "",
+    attributes_text: "",
+    character_ids: [],
+    scene_ids: [],
   };
   addPropDialogVisible.value = true;
+};
+
+const parsePropAttributes = (attributesText: string) => {
+  if (!attributesText || !attributesText.trim()) return undefined;
+  return JSON.parse(attributesText);
 };
 
 const saveProp = async () => {
@@ -1374,6 +1426,15 @@ const saveProp = async () => {
   }
 
   try {
+    let attributes: Record<string, any> | undefined;
+    if (newProp.value.attributes_text && newProp.value.attributes_text.trim()) {
+      try {
+        attributes = parsePropAttributes(newProp.value.attributes_text);
+      } catch (error) {
+        ElMessage.error("自定义属性格式错误，请输入合法JSON");
+        return;
+      }
+    }
     const propData = {
       drama_id: drama.value!.id,
       name: newProp.value.name,
@@ -1381,6 +1442,9 @@ const saveProp = async () => {
       prompt: newProp.value.prompt,
       type: newProp.value.type,
       image_url: newProp.value.image_url,
+      attributes,
+      character_ids: newProp.value.character_ids,
+      scene_ids: newProp.value.scene_ids,
     };
 
     if (editingProp.value) {
@@ -1406,6 +1470,9 @@ const editProp = (prop: any) => {
     prompt: prop.prompt || "",
     type: prop.type || "",
     image_url: prop.image_url || "",
+    attributes_text: prop.attributes ? JSON.stringify(prop.attributes, null, 2) : "",
+    character_ids: (prop.characters || []).map((item: any) => item.id),
+    scene_ids: (prop.scenes || []).map((item: any) => item.id),
   };
   addPropDialogVisible.value = true;
 };

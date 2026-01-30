@@ -79,6 +79,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.Storyboard{},
 		&models.FramePrompt{},
 		&models.Prop{},
+		&models.CharacterProp{},
+		&models.SceneProp{},
+		&models.EpisodeProp{},
+		&models.PropLibrary{},
 
 		// 生成相关
 		&models.ImageGeneration{},

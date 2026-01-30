@@ -69,6 +69,7 @@ export interface Episode {
   storyboards?: Storyboard[]
   scenes?: Scene[]
   characters?: Character[]
+  props?: Prop[]
   shots?: any[]
   created_at: string
   updated_at: string

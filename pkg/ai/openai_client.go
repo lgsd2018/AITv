@@ -3,8 +3,10 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -199,6 +201,13 @@ func (c *OpenAIClient) doChatRequest(req *ChatCompletionRequest) (*ChatCompletio
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		fmt.Printf("OpenAI: HTTP request failed: %v\n", err)
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) {
+			return nil, fmt.Errorf("无法解析域名，当前AI配置的BaseURL可能不可用：%s，请检查网络或在AI配置中更换可用的BaseURL和API Key: %w", c.BaseURL, err)
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "no such host") {
+			return nil, fmt.Errorf("无法解析域名，当前AI配置的BaseURL可能不可用：%s，请检查网络或在AI配置中更换可用的BaseURL和API Key: %w", c.BaseURL, err)
+		}
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()

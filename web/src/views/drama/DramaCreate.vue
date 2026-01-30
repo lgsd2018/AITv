@@ -314,9 +314,25 @@ const handleSubmit = async () => {
   
   try {
     await formRef.value.validate()
+    
+    // Double check form data
+    if (!form.style) {
+      console.warn('Style is empty, resetting to default')
+      form.style = 'Cel-shaded Anime'
+    }
+    
     loading.value = true
     try {
-      const drama = await dramaAPI.create(form)
+      // Use explicit object to ensure all fields are passed
+      const payload = {
+        ...form,
+        style: form.style,
+        reference_work: form.reference_work
+      }
+      console.log('Submitting drama payload:', payload)
+      
+      const drama = await dramaAPI.create(payload)
+      console.log('Drama created:', drama)
       ElMessage.success('创建成功')
       router.push(`/dramas/${drama.id}`)
     } catch (error: any) {

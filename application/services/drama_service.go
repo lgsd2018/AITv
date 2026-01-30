@@ -38,6 +38,22 @@ type CreateDramaRequest struct {
 	Status         string `json:"status"`
 }
 
+type ValidationError struct {
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.Message
+}
+
+func IsValidationError(err error) (*ValidationError, bool) {
+	var target *ValidationError
+	if errors.As(err, &target) {
+		return target, true
+	}
+	return nil, false
+}
+
 type UpdateDramaRequest struct {
 	Title          string `json:"title" binding:"omitempty,min=1,max=100"`
 	Description    string `json:"description"`
@@ -74,33 +90,35 @@ func (s *DramaService) CreateDrama(req *CreateDramaRequest) (*models.Drama, erro
 		drama.Genre = &req.Genre
 	}
 	style := strings.TrimSpace(req.Style)
-	if style != "" {
-		if len(style) > 50 {
-			return nil, errors.New("style is too long")
-		}
-		drama.Style = style
-	} else {
-		s.log.Warnw("CreateDrama: Style is empty", "req", req)
+	if style == "" {
+		style = "realistic"
 	}
+	if len(style) > 50 {
+		return nil, &ValidationError{Message: "风格长度不能超过50个字符"}
+	}
+	drama.Style = style
 	if req.StylePrompt != "" {
 		drama.StylePrompt = &req.StylePrompt
 	}
 	referenceWork := strings.TrimSpace(req.ReferenceWork)
 	if referenceWork != "" {
 		if len(referenceWork) > 200 {
-			return nil, errors.New("reference work is too long")
+			return nil, &ValidationError{Message: "参考作品长度不能超过200个字符"}
 		}
 		drama.ReferenceWork = &referenceWork
-	} else {
-		s.log.Warnw("CreateDrama: ReferenceWork is empty", "req", req)
 	}
-	if req.AspectRatio != "" {
-		drama.AspectRatio = req.AspectRatio
+	aspectRatio := strings.TrimSpace(req.AspectRatio)
+	if aspectRatio == "" {
+		aspectRatio = "16:9"
 	}
+	drama.AspectRatio = aspectRatio
 	if req.ReferenceImage != "" {
 		drama.ReferenceImage = &req.ReferenceImage
 	}
 	if req.Status != "" {
+		if !isValidDramaStatus(req.Status) {
+			return nil, &ValidationError{Message: "状态值不合法"}
+		}
 		drama.Status = req.Status
 	}
 
@@ -111,6 +129,15 @@ func (s *DramaService) CreateDrama(req *CreateDramaRequest) (*models.Drama, erro
 
 	s.log.Infow("Drama created", "drama_id", drama.ID)
 	return drama, nil
+}
+
+func isValidDramaStatus(status string) bool {
+	switch status {
+	case "draft", "planning", "production", "completed", "archived":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *DramaService) GetDrama(dramaID string) (*models.Drama, error) {

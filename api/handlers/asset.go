@@ -124,6 +124,12 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		}
 	}
 
+	includeShared := false
+	includeSharedStr := c.Query("include_shared")
+	if includeSharedStr == "true" || includeSharedStr == "1" {
+		includeShared = true
+	}
+
 	var tagIDs []uint
 	if tagIDsStr := c.Query("tag_ids"); tagIDsStr != "" {
 		for _, idStr := range strings.Split(tagIDsStr, ",") {
@@ -145,6 +151,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 
 	req := &services.ListAssetsRequest{
 		DramaID:      dramaID,
+		IncludeShared: includeShared,
 		EpisodeID:    episodeID,
 		StoryboardID: storyboardID,
 		Type:         assetType,

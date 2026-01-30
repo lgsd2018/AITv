@@ -117,22 +117,6 @@ func (s *ImageGenerationService) GenerateImage(request *GenerateImageRequest) (*
 			// request.Ratio = drama.AspectRatio // Removed: field does not exist
 		}
 		
-		// 如果Drama有AspectRatio，转换为Size覆盖默认Size
-		if drama.AspectRatio != "" {
-			// 简单映射，实际可能需要更复杂的逻辑
-			if drama.AspectRatio == "16:9" {
-				request.Size = "1920x1080" // 或者其他 16:9 分辨率
-			} else if drama.AspectRatio == "9:16" {
-				request.Size = "1080x1920"
-			} else if drama.AspectRatio == "1:1" {
-				request.Size = "1024x1024"
-			} else if drama.AspectRatio == "4:3" {
-				request.Size = "1024x768"
-			} else if drama.AspectRatio == "3:4" {
-				request.Size = "768x1024"
-			}
-		}
-
 		// 应用项目参考图
 		if drama.ReferenceImage != nil && *drama.ReferenceImage != "" {
 			// 避免重复添加
@@ -147,6 +131,28 @@ func (s *ImageGenerationService) GenerateImage(request *GenerateImageRequest) (*
 				request.ReferenceImages = append(request.ReferenceImages, *drama.ReferenceImage)
 			}
 		}
+	}
+
+	// 设置图片尺寸策略
+	// 场景和分镜跟随短剧的宽高比设置，并确保满足 Volcengine 3.6M+ 像素要求
+	if request.ImageType == string(models.ImageTypeScene) || request.ImageType == string(models.ImageTypeStoryboard) {
+		if drama.AspectRatio != "" {
+			if drama.AspectRatio == "16:9" {
+				request.Size = "2560x1440"
+			} else if drama.AspectRatio == "9:16" {
+				request.Size = "1440x2560"
+			} else if drama.AspectRatio == "1:1" {
+				request.Size = "2048x2048"
+			} else if drama.AspectRatio == "4:3" {
+				request.Size = "2560x1920"
+			} else if drama.AspectRatio == "3:4" {
+				request.Size = "1920x2560"
+			}
+		}
+	} else if request.ImageType == string(models.ImageTypeCharacter) || request.ImageType == "prop" {
+		// 角色和道具固定使用 1:1 比例，避免三视图在竖屏模式下重叠
+		// 同时保证像素数满足 Volcengine 的 3.6M+ 要求
+		request.Size = "2048x2048"
 	}
 
 	// 注意：SceneID可能指向Scene或Storyboard表，调用方已经做过权限验证，这里不再重复验证
@@ -226,13 +232,6 @@ func (s *ImageGenerationService) ProcessImageGeneration(imageGenID uint) {
 		}
 	}
 
-	client, err := s.getImageClientWithModel(imageGen.Provider, imageGen.Model)
-	if err != nil {
-		s.log.Errorw("Failed to get image client", "error", err, "provider", imageGen.Provider, "model", imageGen.Model)
-		s.updateImageGenError(imageGenID, err.Error())
-		return
-	}
-
 	// 解析参考图片
 	var referenceImages []string
 	if len(imageGen.ReferenceImages) > 0 {
@@ -243,8 +242,6 @@ func (s *ImageGenerationService) ProcessImageGeneration(imageGenID uint) {
 				"references", referenceImages)
 		}
 	}
-
-	s.log.Infow("Starting image generation", "id", imageGenID, "prompt", imageGen.Prompt, "provider", imageGen.Provider)
 
 	var opts []image.ImageOption
 	if imageGen.NegPrompt != nil && *imageGen.NegPrompt != "" {
@@ -281,25 +278,78 @@ func (s *ImageGenerationService) ProcessImageGeneration(imageGenID uint) {
 
 	prompt := imageGen.Prompt
 	prompt += ", imageRatio:" + imageRatio
-	result, err := client.GenerateImage(prompt, opts...)
+	s.log.Infow("Starting image generation", "id", imageGenID, "prompt", imageGen.Prompt, "provider", imageGen.Provider)
+
+	configs, err := s.aiService.getActiveConfigs("image")
 	if err != nil {
-		s.log.Errorw("Image generation API call failed", "error", err, "id", imageGenID, "prompt", imageGen.Prompt)
+		s.log.Errorw("Failed to load image configs", "error", err, "id", imageGenID)
 		s.updateImageGenError(imageGenID, err.Error())
 		return
 	}
 
-	s.log.Infow("Image generation API call completed", "id", imageGenID, "completed", result.Completed, "has_url", result.ImageURL != "")
-
-	if !result.Completed {
-		s.db.Model(&imageGen).Updates(map[string]interface{}{
-			"status":  models.ImageStatusProcessing,
-			"task_id": result.TaskID,
-		})
-		go s.pollTaskStatus(imageGenID, client, result.TaskID)
-		return
+	candidateConfigs := configs
+	if imageGen.Model != "" {
+		var matched []models.AIServiceConfig
+		for _, cfg := range configs {
+			for _, model := range cfg.Model {
+				if model == imageGen.Model {
+					matched = append(matched, cfg)
+					break
+				}
+			}
+		}
+		if len(matched) > 0 {
+			candidateConfigs = matched
+		}
 	}
 
-	s.completeImageGeneration(imageGenID, result)
+	var lastErr error
+	for index := range candidateConfigs {
+		config := candidateConfigs[index]
+		client, actualProvider, actualModel, buildErr := s.buildImageClientFromConfig(&config, imageGen.Provider, imageGen.Model)
+		if buildErr != nil {
+			lastErr = buildErr
+			continue
+		}
+		if actualProvider != imageGen.Provider || actualModel != imageGen.Model {
+			s.log.Warnw("Image generation using fallback config", "image_id", imageGenID, "config_id", config.ID, "provider", actualProvider, "model", actualModel)
+		}
+
+		result, callErr := client.GenerateImage(prompt, opts...)
+		if callErr == nil {
+			if actualProvider != imageGen.Provider || actualModel != imageGen.Model {
+				s.db.Model(&imageGen).Updates(map[string]interface{}{
+					"provider": actualProvider,
+					"model":    actualModel,
+				})
+			}
+			s.log.Infow("Image generation API call completed", "id", imageGenID, "completed", result.Completed, "has_url", result.ImageURL != "")
+			if !result.Completed {
+				s.db.Model(&imageGen).Updates(map[string]interface{}{
+					"status":  models.ImageStatusProcessing,
+					"task_id": result.TaskID,
+				})
+				go s.pollTaskStatus(imageGenID, client, result.TaskID)
+				return
+			}
+			s.completeImageGeneration(imageGenID, result)
+			return
+		}
+
+		lastErr = callErr
+		s.log.Errorw("Image generation API call failed", "error", callErr, "id", imageGenID, "prompt", imageGen.Prompt, "config_id", config.ID, "provider", actualProvider, "model", actualModel)
+		if !isRetryableAIError(callErr) {
+			break
+		}
+		if index < len(candidateConfigs)-1 {
+			s.log.Warnw("Retrying image generation with next config", "id", imageGenID, "current_config", config.ID)
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("image generation failed: no available config")
+	}
+	s.updateImageGenError(imageGenID, lastErr.Error())
 }
 
 func (s *ImageGenerationService) pollTaskStatus(imageGenID uint, client image.ImageClient, taskID string) {
@@ -332,11 +382,12 @@ func (s *ImageGenerationService) pollTaskStatus(imageGenID uint, client image.Im
 func (s *ImageGenerationService) completeImageGeneration(imageGenID uint, result *image.ImageResult) {
 	now := time.Now()
 
-	// 下载图片到本地存储（仅用于缓存，不更新数据库）
+	// 下载图片到本地存储（如果下载成功，使用本地URL更新数据库，避免远程链接失效或访问受限）
 	// 仅下载 HTTP/HTTPS URL，跳过 data URI
+	finalImageURL := result.ImageURL
 	if s.localStorage != nil && result.ImageURL != "" &&
 		(strings.HasPrefix(result.ImageURL, "http://") || strings.HasPrefix(result.ImageURL, "https://")) {
-		_, err := s.localStorage.DownloadFromURL(result.ImageURL, "images")
+		localURL, err := s.localStorage.DownloadFromURL(result.ImageURL, "images")
 		if err != nil {
 			errStr := err.Error()
 			if len(errStr) > 200 {
@@ -347,16 +398,18 @@ func (s *ImageGenerationService) completeImageGeneration(imageGenID uint, result
 				"id", imageGenID,
 				"original_url", truncateImageURL(result.ImageURL))
 		} else {
-			s.log.Infow("Image downloaded to local storage for caching",
+			s.log.Infow("Image downloaded to local storage",
 				"id", imageGenID,
-				"original_url", truncateImageURL(result.ImageURL))
+				"original_url", truncateImageURL(result.ImageURL),
+				"local_url", localURL)
+			finalImageURL = localURL
 		}
 	}
 
-	// 数据库中保持使用原始URL
+	// 更新数据库
 	updates := map[string]interface{}{
 		"status":       models.ImageStatusCompleted,
-		"image_url":    result.ImageURL,
+		"image_url":    finalImageURL,
 		"completed_at": now,
 	}
 
@@ -379,12 +432,12 @@ func (s *ImageGenerationService) completeImageGeneration(imageGenID uint, result
 
 	// 如果关联了storyboard，同步更新storyboard的composed_image
 	if imageGen.StoryboardID != nil {
-		if err := s.db.Model(&models.Storyboard{}).Where("id = ?", *imageGen.StoryboardID).Update("composed_image", result.ImageURL).Error; err != nil {
+		if err := s.db.Model(&models.Storyboard{}).Where("id = ?", *imageGen.StoryboardID).Update("composed_image", finalImageURL).Error; err != nil {
 			s.log.Errorw("Failed to update storyboard composed_image", "error", err, "storyboard_id", *imageGen.StoryboardID)
 		} else {
 			s.log.Infow("Storyboard updated with composed image",
 				"storyboard_id", *imageGen.StoryboardID,
-				"composed_image", truncateImageURL(result.ImageURL))
+				"composed_image", truncateImageURL(finalImageURL))
 		}
 	}
 
@@ -392,36 +445,36 @@ func (s *ImageGenerationService) completeImageGeneration(imageGenID uint, result
 	if imageGen.SceneID != nil && imageGen.ImageType == string(models.ImageTypeScene) {
 		sceneUpdates := map[string]interface{}{
 			"status":    "generated",
-			"image_url": result.ImageURL,
+			"image_url": finalImageURL,
 		}
 		if err := s.db.Model(&models.Scene{}).Where("id = ?", *imageGen.SceneID).Updates(sceneUpdates).Error; err != nil {
 			s.log.Errorw("Failed to update scene", "error", err, "scene_id", *imageGen.SceneID)
 		} else {
 			s.log.Infow("Scene updated with generated image",
 				"scene_id", *imageGen.SceneID,
-				"image_url", truncateImageURL(result.ImageURL))
+				"image_url", truncateImageURL(finalImageURL))
 		}
 	}
 
 	// 如果关联了角色，同步更新角色的image_url
 	if imageGen.CharacterID != nil {
-		if err := s.db.Model(&models.Character{}).Where("id = ?", *imageGen.CharacterID).Update("image_url", result.ImageURL).Error; err != nil {
+		if err := s.db.Model(&models.Character{}).Where("id = ?", *imageGen.CharacterID).Update("image_url", finalImageURL).Error; err != nil {
 			s.log.Errorw("Failed to update character image_url", "error", err, "character_id", *imageGen.CharacterID)
 		} else {
 			s.log.Infow("Character updated with generated image",
 				"character_id", *imageGen.CharacterID,
-				"image_url", truncateImageURL(result.ImageURL))
+				"image_url", truncateImageURL(finalImageURL))
 		}
 	}
 
 	// 如果关联了道具，同步更新道具的image_url
 	if imageGen.PropID != nil {
-		if err := s.db.Model(&models.Prop{}).Where("id = ?", *imageGen.PropID).Update("image_url", result.ImageURL).Error; err != nil {
+		if err := s.db.Model(&models.Prop{}).Where("id = ?", *imageGen.PropID).Update("image_url", finalImageURL).Error; err != nil {
 			s.log.Errorw("Failed to update prop image_url", "error", err, "prop_id", *imageGen.PropID)
 		} else {
 			s.log.Infow("Prop updated with generated image",
 				"prop_id", *imageGen.PropID,
-				"image_url", truncateImageURL(result.ImageURL))
+				"image_url", truncateImageURL(finalImageURL))
 		}
 	}
 }
@@ -448,46 +501,60 @@ func (s *ImageGenerationService) updateImageGenError(imageGenID uint, errorMsg s
 	}
 }
 
+func (s *ImageGenerationService) buildImageClientFromConfig(config *models.AIServiceConfig, fallbackProvider string, modelName string) (image.ImageClient, string, string, error) {
+	model := modelName
+	if model == "" && len(config.Model) > 0 {
+		model = config.Model[0]
+	}
+
+	actualProvider := config.Provider
+	if actualProvider == "" {
+		actualProvider = fallbackProvider
+	}
+
+	endpoint := config.Endpoint
+	queryEndpoint := config.QueryEndpoint
+
+	if endpoint == "" {
+		switch actualProvider {
+		case "openai", "dalle":
+			endpoint = "/images/generations"
+		case "chatfire":
+			endpoint = "/images/generations"
+		case "volcengine", "volces", "doubao":
+			endpoint = "/images/generations"
+		case "gemini", "google":
+			endpoint = "/v1beta/models/{model}:generateContent"
+		default:
+			endpoint = "/images/generations"
+		}
+	}
+
+	switch actualProvider {
+	case "openai", "dalle":
+		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), actualProvider, model, nil
+	case "chatfire":
+		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), actualProvider, model, nil
+	case "volcengine", "volces", "doubao":
+		return image.NewVolcEngineImageClient(config.BaseURL, config.APIKey, model, endpoint, queryEndpoint), actualProvider, model, nil
+	case "gemini", "google":
+		return image.NewGeminiImageClient(config.BaseURL, config.APIKey, model, endpoint), actualProvider, model, nil
+	default:
+		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), actualProvider, model, nil
+	}
+}
+
 func (s *ImageGenerationService) getImageClient(provider string) (image.ImageClient, error) {
 	config, err := s.aiService.GetDefaultConfig("image")
 	if err != nil {
 		return nil, fmt.Errorf("no image AI config found: %w", err)
 	}
 
-	// 使用第一个模型
-	model := ""
-	if len(config.Model) > 0 {
-		model = config.Model[0]
+	client, _, _, err := s.buildImageClientFromConfig(config, provider, "")
+	if err != nil {
+		return nil, err
 	}
-
-	// 使用配置中的 provider，如果没有则使用传入的 provider
-	actualProvider := config.Provider
-	if actualProvider == "" {
-		actualProvider = provider
-	}
-
-	// 根据 provider 自动设置默认端点
-	var endpoint string
-	var queryEndpoint string
-
-	switch actualProvider {
-	case "openai", "dalle":
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	case "chatfire":
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	case "volcengine", "volces", "doubao":
-		endpoint = "/images/generations"
-		queryEndpoint = ""
-		return image.NewVolcEngineImageClient(config.BaseURL, config.APIKey, model, endpoint, queryEndpoint), nil
-	case "gemini", "google":
-		endpoint = "/v1beta/models/{model}:generateContent"
-		return image.NewGeminiImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	default:
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	}
+	return client, nil
 }
 
 // getImageClientWithModel 根据模型名称获取图片客户端
@@ -511,41 +578,11 @@ func (s *ImageGenerationService) getImageClientWithModel(provider string, modelN
 			return nil, fmt.Errorf("no image AI config found: %w", err)
 		}
 	}
-
-	// 使用指定的模型或配置中的第一个模型
-	model := modelName
-	if model == "" && len(config.Model) > 0 {
-		model = config.Model[0]
+	client, _, _, err := s.buildImageClientFromConfig(config, provider, modelName)
+	if err != nil {
+		return nil, err
 	}
-
-	// 使用配置中的 provider，如果没有则使用传入的 provider
-	actualProvider := config.Provider
-	if actualProvider == "" {
-		actualProvider = provider
-	}
-
-	// 根据 provider 自动设置默认端点
-	var endpoint string
-	var queryEndpoint string
-
-	switch actualProvider {
-	case "openai", "dalle":
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	case "chatfire":
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	case "volcengine", "volces", "doubao":
-		endpoint = "/images/generations"
-		queryEndpoint = ""
-		return image.NewVolcEngineImageClient(config.BaseURL, config.APIKey, model, endpoint, queryEndpoint), nil
-	case "gemini", "google":
-		endpoint = "/v1beta/models/{model}:generateContent"
-		return image.NewGeminiImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	default:
-		endpoint = "/images/generations"
-		return image.NewOpenAIImageClient(config.BaseURL, config.APIKey, model, endpoint), nil
-	}
+	return client, nil
 }
 
 func (s *ImageGenerationService) GetImageGeneration(imageGenID uint) (*models.ImageGeneration, error) {
@@ -809,13 +846,13 @@ func (s *ImageGenerationService) processBackgroundExtraction(taskID string, epis
 	var episode models.Episode
 	if err := s.db.Preload("Storyboards").First(&episode, episodeID).Error; err != nil {
 		s.log.Errorw("Episode not found during background extraction", "error", err, "episode_id", episodeID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "剧集信息不存在")
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("剧集信息不存在"))
 		return
 	}
 
 	if episode.ScriptContent == nil || *episode.ScriptContent == "" {
 		s.log.Errorw("Episode has no script content during background extraction", "episode_id", episodeID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "剧本内容为空")
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("剧本内容为空"))
 		return
 	}
 
@@ -826,7 +863,7 @@ func (s *ImageGenerationService) processBackgroundExtraction(taskID string, epis
 	backgroundsInfo, err := s.extractBackgroundsFromScript(*episode.ScriptContent, dramaID, model, style)
 	if err != nil {
 		s.log.Errorw("Failed to extract backgrounds from script", "error", err, "task_id", taskID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "AI提取场景失败: "+err.Error())
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("AI提取场景失败: %w", err))
 		return
 	}
 
@@ -844,6 +881,11 @@ func (s *ImageGenerationService) processBackgroundExtraction(taskID string, epis
 		for _, bgInfo := range backgroundsInfo {
 			// 保存新场景到数据库（章节级）
 			episodeIDVal := episode.ID
+			var existingScene models.Scene
+			err := tx.Where("drama_id = ? AND location = ? AND time = ? AND image_url IS NOT NULL AND image_url != ''", dramaID, bgInfo.Location, bgInfo.Time).
+				Order("updated_at DESC").
+				First(&existingScene).Error
+
 			scene := &models.Scene{
 				DramaID:         dramaID,
 				EpisodeID:       &episodeIDVal,
@@ -852,6 +894,10 @@ func (s *ImageGenerationService) processBackgroundExtraction(taskID string, epis
 				Prompt:          bgInfo.Prompt,
 				StoryboardCount: 1, // 默认为1
 				Status:          "pending",
+			}
+			if err == nil && existingScene.ImageURL != nil && *existingScene.ImageURL != "" {
+				scene.ImageURL = existingScene.ImageURL
+				scene.Status = "generated"
 			}
 			if err := tx.Create(scene).Error; err != nil {
 				return err
@@ -870,7 +916,7 @@ func (s *ImageGenerationService) processBackgroundExtraction(taskID string, epis
 
 	if err != nil {
 		s.log.Errorw("Failed to save scenes to database", "error", err, "task_id", taskID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "保存场景信息失败: "+err.Error())
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("保存场景信息失败: %w", err))
 		return
 	}
 
@@ -1171,7 +1217,7 @@ Please strictly follow the JSON format and ensure:
 		"full_prompt", prompt)
 
 	// 调用AI服务
-	text, err := s.aiService.GenerateText(prompt, "")
+	text, err := s.aiService.GenerateText(prompt, "", ai.WithMaxTokens(4000))
 	if err != nil {
 		return nil, fmt.Errorf("AI analysis failed: %w", err)
 	}

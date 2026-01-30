@@ -269,6 +269,7 @@ type UpdateSceneRequest struct {
 	Dialogue    *string `json:"dialogue"`
 	Description *string `json:"description"`
 	Duration    *int    `json:"duration"`
+	ImageURL    *string `json:"image_url"`
 	ImagePrompt *string `json:"image_prompt"`
 	VideoPrompt *string `json:"video_prompt"`
 }
@@ -316,6 +317,10 @@ func (s *StoryboardCompositionService) UpdateScene(sceneID string, req *UpdateSc
 	}
 	if req.Duration != nil {
 		updates["duration"] = *req.Duration
+	}
+	if req.ImageURL != nil {
+		updates["image_url"] = req.ImageURL
+		updates["status"] = "generated"
 	}
 	if req.ImagePrompt != nil {
 		updates["image_prompt"] = req.ImagePrompt

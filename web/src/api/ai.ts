@@ -34,5 +34,12 @@ export const aiAPI = {
     return request.post<{ prompt: string }>('/ai/reverse-prompt', {
       image_url: imageUrl
     })
+  },
+
+  optimizePrompt(prompt: string, protectedKeywords?: string[]) {
+    return request.post<{ prompt: string }>('/ai/optimize-prompt', {
+      prompt,
+      protected: protectedKeywords || []
+    })
   }
 }

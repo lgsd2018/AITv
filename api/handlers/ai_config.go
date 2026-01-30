@@ -62,11 +62,24 @@ func (h *AIConfigHandler) GetConfig(c *gin.Context) {
 
 func (h *AIConfigHandler) ListConfigs(c *gin.Context) {
 
+	requestID := c.GetHeader("X-Request-Id")
 	serviceType := c.Query("service_type")
+	if serviceType != "" && serviceType != "text" && serviceType != "image" && serviceType != "video" {
+		h.log.Warnw("ListConfigs invalid service_type", "service_type", serviceType, "request_id", requestID)
+		response.BadRequest(c, "无效的service_type参数")
+		return
+	}
+
+	if h.aiService.GetDB() == nil {
+		h.log.Errorw("ListConfigs failed", "error", "database connection is nil", "request_id", requestID)
+		response.InternalError(c, "获取列表失败: 数据库连接异常")
+		return
+	}
 
 	configs, err := h.aiService.ListConfigs(serviceType)
 	if err != nil {
-		response.InternalError(c, "获取列表失败")
+		h.log.Errorw("ListConfigs failed", "error", err, "request_id", requestID)
+		response.InternalError(c, "获取列表失败: "+err.Error())
 		return
 	}
 

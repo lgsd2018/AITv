@@ -105,17 +105,17 @@ func (s *ScriptGenerationService) processCharacterGeneration(taskID string, req 
 		client, getErr := s.aiService.GetAIClientForModel("text", req.Model)
 		if getErr != nil {
 			s.log.Warnw("Failed to get client for specified model, using default", "model", req.Model, "error", getErr, "task_id", taskID)
-			text, err = s.aiService.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature))
+			text, err = s.aiService.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature), ai.WithMaxTokens(4000))
 		} else {
-			text, err = client.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature))
+			text, err = client.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature), ai.WithMaxTokens(4000))
 		}
 	} else {
-		text, err = s.aiService.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature))
+		text, err = s.aiService.GenerateText(userPrompt, systemPrompt, ai.WithTemperature(temperature), ai.WithMaxTokens(4000))
 	}
 
 	if err != nil {
 		s.log.Errorw("Failed to generate characters", "error", err, "task_id", taskID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "AI生成失败: "+err.Error())
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("AI生成失败: %w", err))
 		return
 	}
 
@@ -133,7 +133,7 @@ func (s *ScriptGenerationService) processCharacterGeneration(taskID string, req 
 
 	if err := utils.SafeParseAIJSON(text, &result); err != nil {
 		s.log.Errorw("Failed to parse characters JSON", "error", err, "raw_response", text[:minInt(500, len(text))], "task_id", taskID)
-		s.taskService.UpdateTaskStatus(taskID, "failed", 0, "解析AI返回结果失败")
+		s.taskService.UpdateTaskError(taskID, fmt.Errorf("解析AI返回结果失败"))
 		return
 	}
 

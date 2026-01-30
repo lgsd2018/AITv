@@ -21,6 +21,7 @@ type CharacterLibraryService struct {
 	aiService   *AIService
 	taskService *TaskService
 	promptI18n  *PromptI18n
+	styleConsistencyService *StyleConsistencyService
 }
 
 func NewCharacterLibraryService(db *gorm.DB, log *logger.Logger, cfg *config.Config) *CharacterLibraryService {
@@ -31,6 +32,7 @@ func NewCharacterLibraryService(db *gorm.DB, log *logger.Logger, cfg *config.Con
 		aiService:   NewAIService(db, log, cfg),
 		taskService: NewTaskService(db, log),
 		promptI18n:  NewPromptI18n(cfg),
+		styleConsistencyService: NewStyleConsistencyService(cfg, log),
 	}
 }
 
@@ -376,12 +378,27 @@ func (s *CharacterLibraryService) GenerateCharacterImage(characterID string, ima
 			prompt += ", " + refPrompt
 		}
 	}
+
+	effectiveStyleForCheck := ""
+	if drama.StylePrompt != nil && *drama.StylePrompt != "" {
+		effectiveStyleForCheck = *drama.StylePrompt
+	} else if style != "" {
+		effectiveStyleForCheck = style
+	} else if drama.Style != "" {
+		effectiveStyleForCheck = drama.Style
+	}
+
+	if s.styleConsistencyService != nil {
+		normalizedPrompt, violations := s.styleConsistencyService.NormalizeAndValidatePrompt(prompt, effectiveStyleForCheck, effectiveRefWork)
+		if len(violations) > 0 {
+			s.log.Infow("Character prompt normalized by style consistency", "character_id", character.ID, "violations", violations)
+		}
+		prompt = normalizedPrompt
+	}
 	
 	// Determine size based on AspectRatio
-	effectiveSize := "2560x1440" // Default 16:9
-	if drama.AspectRatio == "9:16" {
-		effectiveSize = "1440x2560" // Portrait
-	}
+	// 用户建议：角色和道具不用约束尺寸，统一使用方形，避免三视图重叠问题
+	effectiveSize := "2048x2048" // Default Square for characters
 	
 	// 如果传入了size参数，则使用传入的size
 	if size != "" {

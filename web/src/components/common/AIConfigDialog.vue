@@ -428,12 +428,27 @@ const rules: FormRules = {
   }]
 }
 
+const formatRequestError = (error: any, fallback: string) => {
+  const status = error?.response?.status
+  const message = error?.response?.data?.error?.message || error?.message
+  const retryCount = error?.config?.__retryCount
+  const retryInfo = typeof retryCount === 'number' && retryCount > 0 ? `，已重试${retryCount}次` : ''
+  if (status) {
+    return `请求失败(${status})${retryInfo}: ${message || fallback}`
+  }
+  return `${message || fallback}${retryInfo}`
+}
+
 const loadConfigs = async () => {
   loading.value = true
   try {
-    configs.value = await aiAPI.list(activeTab.value)
+    const serviceType = activeTab.value
+    if (!['text', 'image', 'video'].includes(serviceType)) {
+      throw new Error('服务类型非法')
+    }
+    configs.value = await aiAPI.list(serviceType)
   } catch (error: any) {
-    ElMessage.error(error.message || '加载失败')
+    ElMessage.error(formatRequestError(error, '加载失败'))
   } finally {
     loading.value = false
   }

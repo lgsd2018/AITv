@@ -98,6 +98,7 @@
                   <span>✅ {{ $t('workflow.extractedData') }}</span>
                   <el-tag v-if="hasCharacters" type="success">{{ $t('workflow.characters') }}: {{ charactersCount }}</el-tag>
                   <el-tag v-if="currentEpisode?.scenes" type="success">{{ $t('workflow.scenes') }}: {{ currentEpisode.scenes.length }}</el-tag>
+                  <el-tag v-if="hasProps" type="success">{{ $t('workflow.props') }}: {{ propsCount }}</el-tag>
                 </div>
               </template>
             </el-alert>
@@ -126,6 +127,19 @@
                   type="warning"
                 >
                   {{ scene.location }} <span class="secondary-text">· {{ scene.time }}</span>
+                </el-tag>
+              </div>
+            </div>
+
+            <div v-if="hasProps">
+              <h4 class="extracted-title">{{ $t('workflow.extractedProps') }}：</h4>
+              <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                <el-tag 
+                  v-for="prop in propsForEpisode" 
+                  :key="prop.id"
+                  type="primary"
+                >
+                  {{ prop.name }} <span v-if="prop.type" class="secondary-text">({{ prop.type }})</span>
                 </el-tag>
               </div>
             </div>
@@ -289,6 +303,14 @@
                       circle
                     />
                   </el-tooltip>
+                  <el-tooltip content="引用已有素材" placement="top">
+                    <el-button 
+                      size="small" 
+                      @click="openAssetReference('character', char)"
+                      :icon="More"
+                      circle
+                    />
+                  </el-tooltip>
                   <el-tooltip :content="$t('workflow.addToLibrary')" placement="top">
                     <el-button 
                       size="small" 
@@ -406,6 +428,126 @@
                       size="small" 
                       @click="uploadSceneImage(scene.id)"
                       :icon="Upload"
+                      circle
+                    />
+                  </el-tooltip>
+                  <el-tooltip content="引用已有素材" placement="top">
+                    <el-button 
+                      size="small" 
+                      @click="openAssetReference('scene', scene)"
+                      :icon="More"
+                      circle
+                    />
+                  </el-tooltip>
+                </div>
+              </el-card>
+            </div>
+          </div>
+        </div>
+
+        <el-divider />
+
+        <!-- 道具图片生成 -->
+        <div class="image-gen-section">
+          <div class="section-header">
+            <div class="section-title">
+              <h3>
+                <el-icon><Box /></el-icon>
+                {{ $t('workflow.propImages') }}
+              </h3>
+              <el-alert 
+                type="info"
+                :closable="false"
+                style="margin: 0;"
+              >
+                {{ $t('workflow.propCount', { count: propsCount }) }}
+              </el-alert>
+            </div>
+            <div class="section-actions">
+              <el-checkbox 
+                v-model="selectAllProps"
+                @change="toggleSelectAllProps"
+                style="margin-right: 12px;"
+              >
+                {{ $t('workflow.selectAll') }}
+              </el-checkbox>
+              <el-button 
+                type="primary"
+                @click="batchGeneratePropImages"
+                :disabled="selectedPropIds.length === 0"
+                size="default"
+              >
+                {{ $t('workflow.batchGenerateProps') }} ({{ selectedPropIds.length }})
+              </el-button>
+            </div>
+          </div>
+          
+          <div class="scene-image-list">
+            <div v-for="prop in propsForEpisode" :key="prop.id" class="scene-item">
+              <el-card shadow="hover" class="fixed-card">
+                <div class="card-header">
+                  <el-checkbox 
+                    v-model="selectedPropIds"
+                    :value="prop.id"
+                    style="margin-right: 8px;"
+                  />
+                  <div class="header-left">
+                    <h4>{{ prop.name }}</h4>
+                    <el-tag v-if="prop.type" size="small">{{ prop.type }}</el-tag>
+                  </div>
+                </div>
+
+                <div class="card-image-container">
+                  <div v-if="prop.image_url" class="prop-image">
+                    <el-image 
+                      :src="prop.image_url" 
+                      fit="cover" 
+                      :preview-src-list="[prop.image_url]"
+                      :preview-teleported="true"
+                    />
+                  </div>
+                  <div v-else-if="generatingPropImages[prop.id]" class="prop-placeholder generating">
+                    <el-icon :size="64" class="rotating"><Loading /></el-icon>
+                    <span>{{ $t('common.generating') }}</span>
+                  </div>
+                  <div v-else class="prop-placeholder">
+                    <el-icon :size="64"><Box /></el-icon>
+                    <span>{{ $t('common.notGenerated') }}</span>
+                  </div>
+                </div>
+
+                <div class="card-actions">
+                  <el-tooltip :content="$t('tooltip.editPrompt')" placement="top">
+                    <el-button 
+                      size="small" 
+                      @click="openPromptDialog(prop, 'prop')"
+                      :icon="Edit"
+                      circle
+                    />
+                  </el-tooltip>
+                  <el-tooltip :content="$t('tooltip.aiGenerate')" placement="top">
+                    <el-button 
+                      type="primary"
+                      size="small" 
+                      @click="generatePropImage(prop)"
+                      :loading="generatingPropImages[prop.id]"
+                      :icon="MagicStick"
+                      circle
+                    />
+                  </el-tooltip>
+                  <el-tooltip :content="$t('tooltip.uploadImage')" placement="top">
+                    <el-button 
+                      size="small" 
+                      @click="uploadPropImage(prop.id)"
+                      :icon="Upload"
+                      circle
+                    />
+                  </el-tooltip>
+                  <el-tooltip content="引用已有素材" placement="top">
+                    <el-button 
+                      size="small" 
+                      @click="openAssetReference('prop', prop)"
+                      :icon="More"
                       circle
                     />
                   </el-tooltip>
@@ -719,7 +861,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item v-if="currentEditType === 'character'" label="辅助设置">
+        <el-form-item v-if="currentEditType === 'character' || currentEditType === 'prop'" label="辅助设置">
           <el-checkbox-group v-model="editViewSettings">
             <el-checkbox label="white_background">白底图 (White Background)</el-checkbox>
             <el-checkbox label="three_views">三视图 (Front, Side, Back)</el-checkbox>
@@ -736,7 +878,7 @@
           />
           <!-- 一键优化与撤销按钮 -->
           <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end;">
-            <el-button size="small" @click="optimizePrompt">一键优化提示词</el-button>
+            <el-button size="small" :loading="optimizingPrompt" :disabled="optimizingPrompt" @click="optimizePrompt">一键优化提示词</el-button>
             <el-button size="small" :disabled="!canUndoOptimize" @click="undoOptimizePrompt">撤销优化</el-button>
           </div>
         </el-form-item>
@@ -766,6 +908,54 @@
       </div>
       <div v-if="libraryItems.length === 0" class="empty-library">
         <el-empty :description="$t('workflow.emptyLibrary')" />
+      </div>
+    </el-dialog>
+
+    <el-dialog 
+      v-model="assetReferenceDialogVisible" 
+      title="引用已有素材"
+      width="900px"
+    >
+      <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+        <el-input 
+          v-model="assetSearchQuery" 
+          placeholder="搜索素材名称或描述" 
+          clearable
+          @keyup.enter="searchAssets"
+        />
+        <el-button type="primary" @click="searchAssets" :loading="assetReferenceLoading">
+          搜索
+        </el-button>
+      </div>
+      <el-table :data="assetReferenceItems" border stripe style="width: 100%;" v-loading="assetReferenceLoading">
+        <el-table-column prop="name" label="素材名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="category" label="分类" width="120" />
+        <el-table-column label="预览" width="120">
+          <template #default="scope">
+            <el-image 
+              :src="scope.row.thumbnail_url || scope.row.url" 
+              fit="cover" 
+              style="width: 80px; height: 80px; border-radius: 6px;"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="scope">
+            <el-button type="primary" size="small" @click="associateAsset(scope.row)">
+              引用
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <el-pagination
+          background
+          layout="prev, pager, next, total"
+          :total="assetReferencePagination.total"
+          :page-size="assetReferencePagination.page_size"
+          :current-page="assetReferencePagination.page"
+          @current-change="handleAssetPageChange"
+        />
       </div>
     </el-dialog>
 
@@ -844,10 +1034,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { debounce } from 'lodash-es'
 import { 
   User, 
   Location, 
@@ -856,6 +1047,7 @@ import {
   ArrowRight,
   ArrowLeft,
   Place,
+  Box,
   Film,
   Edit,
   More,
@@ -869,11 +1061,64 @@ import {
 import { dramaAPI } from '@/api/drama'
 import { generationAPI } from '@/api/generation'
 import { characterLibraryAPI } from '@/api/character-library'
+import { propAPI } from '@/api/prop'
+import { assetAPI } from '@/api/asset'
 import { aiAPI } from '@/api/ai'
 import type { AIServiceConfig } from '@/types/ai'
 import { imageAPI } from '@/api/image'
 import type { Drama } from '@/types/drama'
+import type { Prop } from '@/types/prop'
+import type { Asset } from '@/types/asset'
 import { AppHeader } from '@/components/common'
+
+// 预设提示词配置
+const PRESET_PROMPTS = {
+  white_background: {
+    inject: [
+      '100% pure white solid background',
+      'entire image is solid white',
+      'no black bars',
+      'no black borders',
+      'no dark areas',
+      'completely blank background',
+      'flat white background',
+      'no scenery',
+      'no environmental elements',
+      'no extra details outside the character'
+    ],
+    detect: [
+      'white background', 'simple background', 'solid background', 'blank background',
+      '100% pure white solid background', 'pure white background', '纯白背景', '白底'
+    ]
+  },
+  three_views: {
+    inject: [
+       'character turnaround sheet',
+       'orthographic design drawing',
+       'three orthogonal views of the same character on one single image',
+       'front view', 'side view', 'back view',
+       'no missing views',
+       'consistent character details across all views',
+       'professional character design sheet'
+    ],
+    detect: [
+      'three views', 'front view', 'side view', 'back view', 'character turnaround', 'character sheet', 'orthographic',
+      'three orthogonal views', '三视图', '正面', '侧面', '背面'
+    ]
+  },
+  composition_fix: {
+    inject: [
+       'full body fully visible', 'whole body', 'no cropping', 'no out of frame',
+       'no partial body', 'padding around edges', 'character centered',
+       'clean and tidy layout', 'no ugly', 'no disfigured',
+       'no malformed limbs', 'no extra limbs', 'no missing limbs'
+    ],
+    detect: [
+      'character centered', 'full body fully visible', 'whole body', 'no cropping', 'padding around edges',
+      'no out of frame', '中心构图', '对称', '黄金分割'
+    ]
+  }
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -882,6 +1127,7 @@ const dramaId = route.params.id as string
 const episodeNumber = parseInt(route.params.episodeNumber as string)
 
 const drama = ref<Drama>()
+const props = ref<Prop[]>([])
 
 // Style label mapping
 const styleLabelMap: Record<string, string> = {
@@ -918,30 +1164,46 @@ const batchGeneratingCharacters = ref(false)
 const batchGeneratingScenes = ref(false)
 const generatingCharacterImages = ref<Record<number, boolean>>({})
 const generatingSceneImages = ref<Record<number, boolean>>({})
+const generatingPropImages = ref<Record<number, boolean>>({})
 
 // 选择状态
 const selectedCharacterIds = ref<number[]>([])
 const selectedSceneIds = ref<number[]>([])
+const selectedPropIds = ref<number[]>([])
 const selectAllCharacters = ref(false)
 const selectAllScenes = ref(false)
+const selectAllProps = ref(false)
 
 // 对话框状态
 const promptDialogVisible = ref(false)
 const libraryDialogVisible = ref(false)
 const uploadDialogVisible = ref(false)
 const modelConfigDialogVisible = ref(false)
+const assetReferenceDialogVisible = ref(false)
 const currentEditItem = ref<any>({ name: '' })
-const currentEditType = ref<'character' | 'scene'>('character')
+const currentEditType = ref<'character' | 'scene' | 'prop'>('character')
 const editPrompt = ref('')
 const editStyle = ref('')
 const editReference = ref('')
 const editSize = ref('')
 const editViewSettings = ref<string[]>([])
+const previousViewSettings = ref<string[]>([])
 // 一键优化提示词的撤销缓存
 const optimizePromptHistory = ref('')
 // 控制撤销按钮是否可用
 const canUndoOptimize = ref(false)
+const optimizingPrompt = ref(false)
 const libraryItems = ref<any[]>([])
+const assetSearchQuery = ref('')
+const assetReferenceType = ref<'character' | 'scene' | 'prop'>('character')
+const assetReferenceTarget = ref<any>(null)
+const assetReferenceItems = ref<Asset[]>([])
+const assetReferenceLoading = ref(false)
+const assetReferencePagination = ref({
+  page: 1,
+  page_size: 20,
+  total: 0
+})
 const currentUploadTarget = ref<any>(null)
 const uploadAction = computed(() => '/api/v1/upload/image')
 const uploadHeaders = computed(() => ({
@@ -981,27 +1243,38 @@ const charactersCount = computed(() => {
   return currentEpisode.value?.characters?.length || 0
 })
 
+const propsForEpisode = computed(() => {
+  return props.value
+})
+
+const propsCount = computed(() => {
+  return propsForEpisode.value.length
+})
+
+const hasProps = computed(() => {
+  return propsCount.value > 0
+})
+
 const hasExtractedData = computed(() => {
   const hasScenes = currentEpisode.value?.scenes && currentEpisode.value.scenes.length > 0
   // 只要有角色或场景，就认为已经提取过数据
-  return hasCharacters.value || hasScenes
+  return hasCharacters.value || hasScenes || hasProps.value
 })
 
 const allImagesGenerated = computed(() => {
-  // 如果没有提取任何数据，允许跳过（可能是空章节或用户想直接进入拆解分镜）
   if (!hasExtractedData.value) return true
   
   const characters = currentEpisode.value?.characters || []
   const scenes = currentEpisode.value?.scenes || []
+  const currentProps = propsForEpisode.value || []
   
-  // 如果角色和场景都为空，允许跳过
-  if (characters.length === 0 && scenes.length === 0) return true
+  if (characters.length === 0 && scenes.length === 0 && currentProps.length === 0) return true
   
-  // 检查所有有数据的项是否都已生成图片
   const allCharsHaveImages = characters.length === 0 || characters.every(char => char.image_url)
   const allScenesHaveImages = scenes.length === 0 || scenes.every(scene => scene.image_url)
+  const allPropsHaveImages = currentProps.length === 0 || currentProps.every(prop => prop.image_url)
   
-  return allCharsHaveImages && allScenesHaveImages
+  return allCharsHaveImages && allScenesHaveImages && allPropsHaveImages
 })
 
 const goBack = () => {
@@ -1144,10 +1417,25 @@ const loadSavedModelConfig = () => {
   }
 }
 
+const loadProps = async () => {
+  try {
+    if (!currentEpisode.value?.id) {
+      props.value = []
+      return
+    }
+    const result = await propAPI.listByEpisode(currentEpisode.value.id)
+    props.value = Array.isArray(result) ? result : []
+  } catch (error: any) {
+    console.error('加载道具失败:', error)
+    props.value = []
+  }
+}
+
 const loadDramaData = async () => {
   try {
     const data = await dramaAPI.get(dramaId)
     drama.value = data
+    await loadProps()
     
     if (!hasScript.value) {
       scriptContent.value = ''
@@ -1333,21 +1621,28 @@ const extractCharactersAndBackgrounds = async () => {
     return
   }
 
+  const scriptContent = currentEpisode.value.script_content || ''
+  if (!scriptContent.trim()) {
+    ElMessage.warning('剧本内容为空，请先生成或填写剧本')
+    return
+  }
+
   extractingCharactersAndBackgrounds.value = true
   
   try {
     const episodeId = currentEpisode.value.id
 
     // 并行创建异步任务
-    const [characterTask, backgroundTask] = await Promise.all([
+    const [characterTask, backgroundTask, propTask] = await Promise.all([
       generationAPI.generateCharacters({
         drama_id: dramaId.toString(),
         episode_id: parseInt(episodeId),
-        outline: currentEpisode.value.script_content || '',
+        outline: scriptContent,
         count: 0,
         model: selectedTextModel.value  // 传递用户选择的文本模型
       }),
-      dramaAPI.extractBackgrounds(episodeId.toString(), selectedTextModel.value)  // 传递用户选择的文本模型
+      dramaAPI.extractBackgrounds(episodeId.toString(), selectedTextModel.value),
+      propAPI.extractFromScript(parseInt(episodeId))
     ])
     
     ElMessage.success('任务已创建，正在后台处理...')
@@ -1355,10 +1650,11 @@ const extractCharactersAndBackgrounds = async () => {
     // 并行轮询两个任务
     await Promise.all([
       pollExtractTask(characterTask.task_id, 'character'),
-      pollExtractTask(backgroundTask.task_id, 'background')
+      pollExtractTask(backgroundTask.task_id, 'background'),
+      pollExtractTask(propTask.task_id, 'prop')
     ])
     
-    ElMessage.success('角色和场景提取成功！')
+    ElMessage.success('角色、场景和道具提取成功！')
     await loadDramaData()
   } catch (error: any) {
     console.error('角色和场景提取失败:', error)
@@ -1375,6 +1671,17 @@ const extractCharactersAndBackgrounds = async () => {
         duration: 5000,
         showClose: true
       })
+    } else if (
+      errorMsg.includes('script content') ||
+      errorMsg.includes('剧本内容为空')
+    ) {
+      ElMessage.warning('剧本内容为空，请先生成或填写剧本')
+    } else if (
+      errorMsg.includes('episode not found') ||
+      errorMsg.includes('剧集信息不存在') ||
+      errorMsg.includes('章节信息不存在')
+    ) {
+      ElMessage.error('章节信息不存在，请刷新页面后重试')
     } else {
       ElMessage.error(errorMsg)
     }
@@ -1384,7 +1691,7 @@ const extractCharactersAndBackgrounds = async () => {
 }
 
 // 轮询提取任务状态
-const pollExtractTask = async (taskId: string, type: 'character' | 'background') => {
+const pollExtractTask = async (taskId: string, type: 'character' | 'background' | 'prop') => {
   const maxAttempts = 300 // 最多轮询300次（10分钟）
   const interval = 2000 // 每2秒查询一次
   
@@ -1406,7 +1713,9 @@ const pollExtractTask = async (taskId: string, type: 'character' | 'background')
         return
       } else if (task.status === 'failed') {
         // 任务失败
-        throw new Error(task.error || `${type === 'character' ? '角色生成' : '场景提取'}失败`)
+        const errorPrefix = type === 'character' ? '角色生成' : type === 'background' ? '场景提取' : '道具提取'
+        const errorText = task.error || task.message || `${errorPrefix}失败`
+        throw new Error(errorText)
       }
       // 否则继续轮询
     } catch (error: any) {
@@ -1415,13 +1724,19 @@ const pollExtractTask = async (taskId: string, type: 'character' | 'background')
     }
   }
   
-  throw new Error(`${type === 'character' ? '角色生成' : '场景提取'}超时`)
+  const timeoutPrefix = type === 'character' ? '角色生成' : type === 'background' ? '场景提取' : '道具提取'
+  throw new Error(`${timeoutPrefix}超时`)
 }
 
 
-const generateCharacterImage = async (characterId: number, styleParam?: string, sizeParam?: string, referenceWorkParam?: string, whiteBackgroundParam?: boolean) => {
+const generateCharacterImage = async (characterId: number, styleParam?: string, sizeParam?: string, referenceWorkParam?: string, whiteBackgroundParam?: boolean, forceRegenerate?: boolean) => {
+  const currentCharacter = currentEpisode.value?.characters?.find(char => char.id === characterId)
+  if (currentCharacter?.image_url && !forceRegenerate) {
+    ElMessage.info('角色已有图片')
+    return
+  }
+
   generatingCharacterImages.value[characterId] = true
-  
   try {
     // 准备参数
     let style = styleParam
@@ -1462,7 +1777,7 @@ const generateCharacterImage = async (characterId: number, styleParam?: string, 
       await loadDramaData()
     }
   } catch (error: any) {
-    ElMessage.error(error.message || '生成失败')
+    ElMessage.error(formatImageGenerationError(error, '生成失败'))
   } finally {
     generatingCharacterImages.value[characterId] = false
   }
@@ -1484,6 +1799,30 @@ const toggleSelectAllScenes = () => {
   }
 }
 
+const toggleSelectAllProps = () => {
+  if (selectAllProps.value) {
+    selectedPropIds.value = propsForEpisode.value.map(prop => prop.id)
+  } else {
+    selectedPropIds.value = []
+  }
+}
+
+const formatImageGenerationError = (error: any, fallback: string) => {
+  const message = error?.response?.data?.error?.message || error?.message || fallback
+  const normalized = String(message || '').toLowerCase()
+  if (
+    normalized.includes('no such host') ||
+    normalized.includes('dial tcp') ||
+    normalized.includes('ark.cn-beijing.volces.com')
+  ) {
+    return 'AI服务地址无法解析，请在 设置 > AI服务配置 中切换可用服务或检查网络/DNS'
+  }
+  if (normalized.includes('no active config found')) {
+    return '未找到可用的AI服务配置，请先在 设置 > AI服务配置 中启用配置'
+  }
+  return message || fallback
+}
+
 const batchGenerateCharacterImages = async () => {
   if (selectedCharacterIds.value.length === 0) {
     ElMessage.warning('请先选择要生成的角色')
@@ -1492,25 +1831,39 @@ const batchGenerateCharacterImages = async () => {
   
   batchGeneratingCharacters.value = true
   try {
+    const currentCharacters = currentEpisode.value?.characters || []
+    const selectedCharacters = currentCharacters.filter(char => selectedCharacterIds.value.includes(char.id))
+    const pendingCharacters = selectedCharacters.filter(char => !char.image_url)
+    if (pendingCharacters.length === 0) {
+      ElMessage.info('选中的角色都已有图片')
+      return
+    }
+
     // 获取用户选择的图片生成模型
     const model = selectedImageModel.value || undefined
     
     // 使用批量生成API
     await characterLibraryAPI.batchGenerateCharacterImages(
-      selectedCharacterIds.value.map(id => id.toString()),
+      pendingCharacters.map(char => char.id.toString()),
       model
     )
     
     ElMessage.success($t('workflow.batchTaskSubmitted'))
     await loadDramaData()
   } catch (error: any) {
-    ElMessage.error(error.message || $t('workflow.batchGenerateFailed'))
+    ElMessage.error(formatImageGenerationError(error, $t('workflow.batchGenerateFailed')))
   } finally {
     batchGeneratingCharacters.value = false
   }
 }
 
 const generateSceneImage = async (sceneId: number) => {
+  const currentScene = currentEpisode.value?.scenes?.find(scene => scene.id === sceneId)
+  if (currentScene?.image_url) {
+    ElMessage.info('场景已有图片')
+    return
+  }
+
   generatingSceneImages.value[sceneId] = true
   
   try {
@@ -1534,7 +1887,7 @@ const generateSceneImage = async (sceneId: number) => {
       await loadDramaData()
     }
   } catch (error: any) {
-    ElMessage.error(error.message || '生成失败')
+    ElMessage.error(formatImageGenerationError(error, '生成失败'))
   } finally {
     generatingSceneImages.value[sceneId] = false
   }
@@ -1548,8 +1901,16 @@ const batchGenerateSceneImages = async () => {
   
   batchGeneratingScenes.value = true
   try {
-    const promises = selectedSceneIds.value.map(sceneId => 
-      generateSceneImage(sceneId)
+    const currentScenes = currentEpisode.value?.scenes || []
+    const selectedScenes = currentScenes.filter(scene => selectedSceneIds.value.includes(scene.id))
+    const pendingScenes = selectedScenes.filter(scene => !scene.image_url)
+    if (pendingScenes.length === 0) {
+      ElMessage.info('选中的场景都已有图片')
+      return
+    }
+
+    const promises = pendingScenes.map(scene => 
+      generateSceneImage(scene.id)
     )
     const results = await Promise.allSettled(promises)
     
@@ -1562,9 +1923,58 @@ const batchGenerateSceneImages = async () => {
       ElMessage.warning($t('workflow.batchCompletePartial', { success: successCount, fail: failCount }))
     }
   } catch (error: any) {
-    ElMessage.error(error.message || $t('workflow.batchGenerateFailed'))
+    ElMessage.error(formatImageGenerationError(error, $t('workflow.batchGenerateFailed')))
   } finally {
     batchGeneratingScenes.value = false
+  }
+}
+
+const generatePropImage = async (prop: any) => {
+  if (!prop.prompt) {
+    ElMessage.warning('请先设置道具的图片提示词')
+    openPromptDialog(prop, 'prop')
+    return
+  }
+  if (prop.image_url) {
+    ElMessage.info('道具已有图片')
+    return
+  }
+
+  generatingPropImages.value[prop.id] = true
+  try {
+    const response = await propAPI.generateImage(prop.id)
+    const taskId = response.task_id
+    if (taskId) {
+      await pollSimpleTask(taskId, '道具图片生成完成！')
+    } else {
+      ElMessage.success('道具图片生成已启动')
+      await loadDramaData()
+    }
+  } catch (error: any) {
+    ElMessage.error(formatImageGenerationError(error, '生成失败'))
+  } finally {
+    generatingPropImages.value[prop.id] = false
+  }
+}
+
+const batchGeneratePropImages = async () => {
+  if (selectedPropIds.value.length === 0) {
+    ElMessage.warning('请先选择要生成的道具')
+    return
+  }
+
+  try {
+    const selectedProps = propsForEpisode.value.filter(prop => selectedPropIds.value.includes(prop.id))
+    const pendingProps = selectedProps.filter(prop => !prop.image_url)
+    if (pendingProps.length === 0) {
+      ElMessage.info('选中的道具都已有图片')
+      return
+    }
+    await Promise.all(pendingProps.map(prop => propAPI.generateImage(prop.id)))
+    ElMessage.success('道具批量生成任务已提交')
+    await loadDramaData()
+  } catch (error: any) {
+    ElMessage.error(error.message || '批量生成失败')
   }
 }
 
@@ -1605,7 +2015,7 @@ const generateShots = async () => {
     await pollTaskStatus(response.task_id)
     
   } catch (error: any) {
-    ElMessage.error(error.message || '拆分失败')
+    ElMessage.error(formatImageGenerationError(error, '拆分失败'))
     generatingShots.value = false
   }
 }
@@ -1643,7 +2053,7 @@ const pollTaskStatus = async (taskId: string) => {
           pollTimer = null
         }
         generatingShots.value = false
-        ElMessage.error(task.error || '分镜拆分失败')
+        ElMessage.error(formatImageGenerationError({ message: task.error }, '分镜拆分失败'))
       }
       // 否则继续轮询
     } catch (error: any) {
@@ -1706,7 +2116,7 @@ const saveShotEdit = async () => {
 }
 
 // 对话框相关方法
-const openPromptDialog = (item: any, type: 'character' | 'scene') => {
+const openPromptDialog = (item: any, type: 'character' | 'scene' | 'prop') => {
   currentEditItem.value = item
   currentEditItem.value.name = item.name || item.location
   currentEditType.value = type
@@ -1736,60 +2146,152 @@ const openPromptDialog = (item: any, type: 'character' | 'scene') => {
   }
   
   // 初始化视图设置
-  if (type === 'character') {
-      const settings = []
-      // 默认选中，如果提示词中没有明确否定（这里简单处理为默认选中）
-      // 检查提示词中是否已包含
+  if (type === 'character' || type === 'prop') {
+      const settings: string[] = []
       const currentPrompt = editPrompt.value.toLowerCase()
       
-      // 白底图
-      // 检查提示词中是否包含白底相关的关键词
-      const whiteBgKeywords = ['white background', 'simple background', 'solid background', 'blank background']
-      const hasWhiteBg = whiteBgKeywords.some(keyword => currentPrompt.includes(keyword))
-      
+      // 白底图 (检测或为空时默认选中)
+      const hasWhiteBg = PRESET_PROMPTS.white_background.detect.some(k => currentPrompt.includes(k.toLowerCase()))
       if (hasWhiteBg || !currentPrompt) {
           settings.push('white_background')
       }
       
-      // 三视图
-      // 检查提示词中是否包含三视图相关的关键词
-      const threeViewsKeywords = ['three views', 'front view', 'side view', 'back view', 'character turnaround', 'character sheet', 'orthographic']
-      const hasThreeViews = threeViewsKeywords.some(keyword => currentPrompt.includes(keyword))
-      
+      // 三视图 (检测或为空时默认选中)
+      const hasThreeViews = PRESET_PROMPTS.three_views.detect.some(k => currentPrompt.includes(k.toLowerCase()))
       if (hasThreeViews || !currentPrompt) {
           settings.push('three_views')
       }
       
-      // 构图修正 (默认选中)
-      // 检查是否包含任何一个构图修正的关键正向词
-      const hasCompositionPrompts = ['best quality', 'character centered', 'full body fully visible', 'whole body', 'no cropping', 'padding around edges']
-          .some(p => currentPrompt.includes(p))
-      
-      if (hasCompositionPrompts || !currentPrompt) {
+      // 构图修正 (检测或为空时默认选中)
+      const hasComposition = PRESET_PROMPTS.composition_fix.detect.some(k => currentPrompt.includes(k.toLowerCase()))
+      if (hasComposition || !currentPrompt) {
           settings.push('composition_fix')
       }
       
       editViewSettings.value = settings
+      if (settings.length > 0) {
+          updatePromptWithSettings(settings, [])
+      }
   } else {
       editViewSettings.value = []
   }
   
+  previousViewSettings.value = [...editViewSettings.value]
   promptDialogVisible.value = true
 }
 
+// 监听视图设置变化，实时更新提示词
+const handleViewSettingsChange = (newSettings: string[]) => {
+  const oldSettings = previousViewSettings.value
+  previousViewSettings.value = [...newSettings]
+  
+  updatePromptWithSettings(newSettings, oldSettings)
+}
+
+// 监听视图设置变化（作为 v-model 的补充，确保实时性）
+watch(editViewSettings, (newSettings) => {
+  if (promptDialogVisible.value) {
+    handleViewSettingsChange(newSettings)
+  }
+}, { deep: true })
+
+const updatePromptWithSettings = (newSettings: string[], oldSettings: string[]) => {
+  let current = editPrompt.value
+  
+  // 找出新增的选项
+  const added = newSettings.filter(s => !oldSettings.includes(s))
+  // 找出移除的选项
+  const removed = oldSettings.filter(s => !newSettings.includes(s))
+  
+  // 处理移除
+  if (removed.length > 0) {
+    let segments = current.split(/[,，\n]+/).map(s => s.trim()).filter(Boolean)
+    
+    removed.forEach(setting => {
+      const config = PRESET_PROMPTS[setting as keyof typeof PRESET_PROMPTS]
+      if (config) {
+        // 移除所有相关的提示词（包括检测到的和注入的）
+        const allKeywords = [...config.detect, ...config.inject]
+        segments = segments.filter(seg => {
+          const lowerSeg = seg.toLowerCase()
+          return !allKeywords.some(k => lowerSeg.includes(k.toLowerCase()))
+        })
+      }
+    })
+    current = segments.join(', ')
+  }
+  
+  // 处理新增
+  if (added.length > 0) {
+    let segments = current.split(/[,，\n]+/).map(s => s.trim()).filter(Boolean)
+    
+    added.forEach(setting => {
+       const config = PRESET_PROMPTS[setting as keyof typeof PRESET_PROMPTS]
+       if (config) {
+         const newKeywords = config.inject.filter(k => 
+           !segments.some(seg => seg.toLowerCase().includes(k.toLowerCase()))
+         )
+         if (newKeywords.length > 0) {
+           segments.push(...newKeywords)
+         }
+       }
+    })
+    current = segments.join(', ')
+  }
+  
+  editPrompt.value = current
+}
+
+const getProtectedKeywords = () => {
+  const keywords = new Set<string>()
+  editViewSettings.value.forEach(setting => {
+    const config = PRESET_PROMPTS[setting as keyof typeof PRESET_PROMPTS]
+    if (config) {
+      config.inject.forEach(item => keywords.add(item))
+    }
+  })
+  if (editStyle.value) {
+    keywords.add(editStyle.value)
+  }
+  if (editReference.value) {
+    keywords.add(`style reference: ${editReference.value}`)
+  }
+  return Array.from(keywords)
+}
+
 // 保护性提示词识别与优化处理
-const optimizePrompt = () => {
-  // 提示词为空时不进行优化
+const optimizePrompt = async () => {
   if (!editPrompt.value || !editPrompt.value.trim()) {
     ElMessage.warning('提示词为空，无法优化')
     return
   }
-  // 记录优化前内容用于撤销
+  if (optimizingPrompt.value) {
+    return
+  }
+  optimizingPrompt.value = true
   optimizePromptHistory.value = editPrompt.value
-  const optimized = buildOptimizedPrompt(editPrompt.value)
-  editPrompt.value = optimized
-  canUndoOptimize.value = true
-  ElMessage.success('提示词已优化，已保护白底、三视图、基础风格及构图关键词')
+  try {
+    const protectedKeywords = getProtectedKeywords()
+    const response = await aiAPI.optimizePrompt(editPrompt.value, protectedKeywords)
+    const optimized = response.prompt?.trim()
+    if (optimized) {
+      editPrompt.value = optimized
+      canUndoOptimize.value = true
+      ElMessage.success('提示词已优化，已保护白底、三视图、基础风格及构图关键词')
+      return
+    }
+    const fallback = buildOptimizedPrompt(editPrompt.value)
+    editPrompt.value = fallback
+    canUndoOptimize.value = true
+    ElMessage.success('提示词已优化，已使用本地优化策略')
+  } catch (error: any) {
+    const fallback = buildOptimizedPrompt(editPrompt.value)
+    editPrompt.value = fallback
+    canUndoOptimize.value = true
+    ElMessage.warning('提示词优化服务不可用，已使用本地优化策略')
+  } finally {
+    optimizingPrompt.value = false
+  }
 }
 
 // 撤销优化提示词
@@ -1817,58 +2319,20 @@ const buildOptimizedPrompt = (rawPrompt: string) => {
     .map(item => item.trim())
     .filter(Boolean)
 
-  // 白底图保护关键词
+  // 白底图保护关键词 (包含检测和注入的词)
   const whiteBgProtected = [
-    '100% pure white solid background',
-    'entire image is solid white',
-    'no black bars',
-    'no black borders',
-    'no dark areas',
-    'completely blank background',
-    'flat white background',
-    'no scenery',
-    'no environmental elements',
-    'no extra details outside the character',
-    'white background',
-    'solid white background',
-    'pure white background',
-    '纯白背景',
-    '白底'
+    ...PRESET_PROMPTS.white_background.detect,
+    ...PRESET_PROMPTS.white_background.inject
   ]
   // 三视图保护关键词
   const threeViewsProtected = [
-    'character turnaround sheet',
-    'orthographic design drawing',
-    'three orthogonal views',
-    'front view',
-    'side view',
-    'back view',
-    'no missing views',
-    'consistent character details',
-    'professional character design sheet',
-    '三视图',
-    '正面',
-    '侧面',
-    '背面'
+    ...PRESET_PROMPTS.three_views.detect,
+    ...PRESET_PROMPTS.three_views.inject
   ]
   // 构图修正保护关键词
   const compositionProtected = [
-    'full body fully visible',
-    'whole body',
-    'no cropping',
-    'no out of frame',
-    'no partial body',
-    'padding around edges',
-    'character centered',
-    'clean and tidy layout',
-    'no ugly',
-    'no disfigured',
-    'no malformed limbs',
-    'no extra limbs',
-    'no missing limbs',
-    '中心构图',
-    '对称',
-    '黄金分割'
+    ...PRESET_PROMPTS.composition_fix.detect,
+    ...PRESET_PROMPTS.composition_fix.inject
   ]
   // 基础画面风格保护关键词
   const styleCoreKeywords = [
@@ -1963,10 +2427,10 @@ const buildOptimizedPrompt = (rawPrompt: string) => {
 
   // 适度增强基础风格描述（仅补充，避免显著增量）
   const hasStyleEnhancement = resultSegments.some(seg =>
-    /cinematic|highly detailed|细节|电影质感/i.test(seg)
+    /cinematic|highly detailed|细节|电影质感|best quality|masterpiece/i.test(seg)
   )
-  if (hasStyleCore && !hasStyleEnhancement && rawPrompt.length < 400) {
-    resultSegments.push('highly detailed, clean silhouette')
+  if (!hasStyleEnhancement && rawPrompt.length < 800) {
+    resultSegments.push('best quality, masterpiece, highly detailed')
   }
 
   return resultSegments.join(', ')
@@ -1975,88 +2439,74 @@ const buildOptimizedPrompt = (rawPrompt: string) => {
 const savePrompt = async () => {
   try {
     if (currentEditType.value === 'character') {
-      // 处理视图设置，追加到提示词
-      let finalPrompt = editPrompt.value
-      
-      if (editViewSettings.value.includes('white_background')) {
-          // 1. 白底图提示词
-          const whiteBgPrompts = [
-              '100% pure white solid background',
-              'entire image is solid white',
-              'no black bars',
-              'no black borders',
-              'no dark areas',
-              'completely blank background',
-              'flat white background',
-              'no scenery',
-              'no environmental elements',
-              'no extra details outside the character'
-          ]
-          
-          const missingBgPrompts = whiteBgPrompts.filter(p => !finalPrompt.toLowerCase().includes(p))
-          if (missingBgPrompts.length > 0) {
-              finalPrompt += ', ' + missingBgPrompts.join(', ')
-          }
-      }
-      
-      if (editViewSettings.value.includes('three_views')) {
-           // 2. 三视图提示词
-           const views = [
-               'character turnaround sheet',
-               'orthographic design drawing',
-               'three orthogonal views of the same character on one single image',
-               'front view', 
-               'side view', 
-               'back view',
-               'no missing views',
-               'consistent character details across all views',
-               'professional character design sheet'
-           ]
-           const missingViews = views.filter(v => !finalPrompt.toLowerCase().includes(v))
-           if (missingViews.length > 0) {
-               finalPrompt += ', ' + missingViews.join(', ')
-           }
-       }
-       
-       if (editViewSettings.value.includes('composition_fix')) {
-           // 3. 构图修正提示词
-           const compositionPrompts = [
-               'full body fully visible',
-               'whole body',
-               'no cropping',
-               'no out of frame',
-               'no partial body',
-               'padding around edges',
-               'character centered',
-               'clean and tidy layout',
-               'no ugly',
-               'no disfigured',
-               'no malformed limbs',
-               'no extra limbs',
-               'no missing limbs'
-           ]
-           
-           const missingPrompts = compositionPrompts.filter(p => !finalPrompt.toLowerCase().includes(p))
-           if (missingPrompts.length > 0) {
-               finalPrompt += ', ' + missingPrompts.join(', ')
-           }
-       }
-       
-       // 更新提示词显示
-       editPrompt.value = finalPrompt
+      // 提示词已实时同步，直接使用
+      const finalPrompt = editPrompt.value
       
       await characterLibraryAPI.updateCharacter(currentEditItem.value.id, {
         appearance: finalPrompt
       })
+
+      if (currentEditItem.value) {
+        currentEditItem.value.appearance = finalPrompt
+      }
+      if (currentEpisode.value?.characters) {
+        const targetCharacter = currentEpisode.value.characters.find(char => char.id === currentEditItem.value.id)
+        if (targetCharacter) {
+          targetCharacter.appearance = finalPrompt
+        }
+      }
       
       // 计算是否启用白底图
       const useWhiteBackground = editViewSettings.value.includes('white_background')
       
       // 传递自定义参数进行生成
-      await generateCharacterImage(currentEditItem.value.id, editStyle.value, editSize.value, editReference.value, useWhiteBackground)
+      await generateCharacterImage(currentEditItem.value.id, editStyle.value, editSize.value, editReference.value, useWhiteBackground, true)
+    } else if (currentEditType.value === 'prop') {
+      const finalPrompt = editPrompt.value
+      
+      // 保存道具提示词
+      await propAPI.update(currentEditItem.value.id, {
+        prompt: finalPrompt
+      })
+
+      if (currentEditItem.value) {
+        currentEditItem.value.prompt = finalPrompt
+      }
+      const targetProp = props.value.find(prop => prop.id === currentEditItem.value.id)
+      if (targetProp) {
+        targetProp.prompt = finalPrompt
+      }
+      
+      // 启动道具图片生成并保持生成状态
+      generatingPropImages.value[currentEditItem.value.id] = true
+      try {
+        const response = await propAPI.generateImage(currentEditItem.value.id)
+        const taskId = response.task_id
+        // 有任务ID时轮询等待结果
+        if (taskId) {
+          await pollSimpleTask(taskId, '道具图片生成完成！')
+        } else {
+          ElMessage.success('道具图片生成已启动')
+          await loadDramaData()
+        }
+      } catch (error: any) {
+        ElMessage.error(formatImageGenerationError(error, '生成失败'))
+      } finally {
+        generatingPropImages.value[currentEditItem.value.id] = false
+      }
     } else {
       // 1. 先保存场景提示词
       await dramaAPI.updateScenePrompt(currentEditItem.value.id.toString(), editPrompt.value)
+
+      if (currentEditItem.value) {
+        currentEditItem.value.prompt = editPrompt.value
+      }
+      if (currentEpisode.value?.scenes) {
+        const targetScene = currentEpisode.value.scenes.find(scene => scene.id === currentEditItem.value.id)
+        if (targetScene) {
+          targetScene.prompt = editPrompt.value
+        }
+      }
       
       // 2. 生成场景图片
       const model = selectedImageModel.value || undefined
@@ -2098,6 +2548,11 @@ const uploadSceneImage = (sceneId: number) => {
   uploadDialogVisible.value = true
 }
 
+const uploadPropImage = (propId: number) => {
+  currentUploadTarget.value = { id: propId, type: 'prop' }
+  uploadDialogVisible.value = true
+}
+
 const selectFromLibrary = async (characterId: number) => {
   try {
     const result = await characterLibraryAPI.list({ page_size: 50 })
@@ -2106,6 +2561,93 @@ const selectFromLibrary = async (characterId: number) => {
     libraryDialogVisible.value = true
   } catch (error: any) {
     ElMessage.error(error.message || $t('workflow.loadLibraryFailed'))
+  }
+}
+
+const getAssetCategory = (type: 'character' | 'scene' | 'prop') => {
+  if (type === 'character') return '角色'
+  if (type === 'scene') return '场景'
+  return '道具'
+}
+
+const openAssetReference = async (type: 'character' | 'scene' | 'prop', target: any) => {
+  assetReferenceType.value = type
+  assetReferenceTarget.value = target
+  assetReferencePagination.value.page = 1
+  assetReferenceDialogVisible.value = true
+  await searchAssets()
+}
+
+const searchAssets = async () => {
+  try {
+    assetReferenceLoading.value = true
+    const category = getAssetCategory(assetReferenceType.value)
+    const result = await assetAPI.listAssets({
+      drama_id: dramaId,
+      include_shared: true,
+      type: 'image',
+      category,
+      search: assetSearchQuery.value.trim() || undefined,
+      page: assetReferencePagination.value.page,
+      page_size: assetReferencePagination.value.page_size
+    })
+    assetReferenceItems.value = result.items || []
+    assetReferencePagination.value.total = result.pagination?.total || 0
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载素材失败')
+  } finally {
+    assetReferenceLoading.value = false
+  }
+}
+
+const debouncedSearchAssets = debounce(() => {
+  if (!assetReferenceDialogVisible.value) {
+    return
+  }
+  assetReferencePagination.value.page = 1
+  searchAssets()
+}, 400)
+
+watch(assetSearchQuery, (value, prev) => {
+  if (value === prev) {
+    return
+  }
+  debouncedSearchAssets()
+})
+
+onBeforeUnmount(() => {
+  debouncedSearchAssets.cancel()
+})
+
+const handleAssetPageChange = (page: number) => {
+  assetReferencePagination.value.page = page
+  searchAssets()
+}
+
+const associateAsset = async (asset: Asset) => {
+  if (!assetReferenceTarget.value) {
+    return
+  }
+  try {
+    const imageUrl = asset.url
+    if (assetReferenceType.value === 'character') {
+      await characterLibraryAPI.updateCharacter(assetReferenceTarget.value.id, {
+        image_url: imageUrl
+      })
+    } else if (assetReferenceType.value === 'scene') {
+      await dramaAPI.updateScene(assetReferenceTarget.value.id.toString(), {
+        image_url: imageUrl
+      })
+    } else {
+      await propAPI.update(assetReferenceTarget.value.id, {
+        image_url: imageUrl
+      })
+    }
+    ElMessage.success('引用素材成功')
+    assetReferenceDialogVisible.value = false
+    await loadDramaData()
+  } catch (error: any) {
+    ElMessage.error(error.message || '引用素材失败')
   }
 }
 
@@ -2168,6 +2710,9 @@ const handleUploadSuccess = async (response: any) => {
     } else if (currentUploadTarget.value?.type === 'scene') {
       // TODO: 场景图片上传API
       ElMessage.success('上传成功！')
+    } else if (currentUploadTarget.value?.type === 'prop') {
+      await propAPI.update(currentUploadTarget.value.id, { image_url: imageUrl })
+      ElMessage.success('上传成功！')
     }
     
     await loadDramaData()
@@ -2175,6 +2720,27 @@ const handleUploadSuccess = async (response: any) => {
   } catch (error: any) {
     ElMessage.error(error.message || '上传失败')
   }
+}
+
+const pollSimpleTask = async (taskId: string, successMessage: string) => {
+  const maxAttempts = 300
+  const interval = 2000
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(resolve => setTimeout(resolve, interval))
+
+    const task = await generationAPI.getTaskStatus(taskId)
+    if (task.status === 'completed') {
+      await loadDramaData()
+      ElMessage.success(successMessage)
+      return
+    }
+    if (task.status === 'failed') {
+      throw new Error(task.error || '任务失败')
+    }
+  }
+
+  throw new Error('任务超时')
 }
 
 const handleUploadError = () => {
@@ -2633,7 +3199,8 @@ onMounted(() => {
     background: var(--bg-secondary);
 
     .char-image,
-    .scene-image {
+    .scene-image,
+    .prop-image {
       width: 100%;
       height: 100%;
       position: relative;
@@ -2647,7 +3214,8 @@ onMounted(() => {
     }
 
     .char-placeholder,
-    .scene-placeholder {
+    .scene-placeholder,
+    .prop-placeholder {
       display: flex;
       flex-direction: column;
       align-items: center;

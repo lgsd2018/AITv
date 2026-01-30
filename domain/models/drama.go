@@ -56,6 +56,7 @@ type Character struct {
 
 	// 多对多关系：角色可以属于多个章节
 	Episodes []Episode `gorm:"many2many:episode_characters;" json:"episodes,omitempty"`
+	Props    []Prop    `gorm:"many2many:character_props;" json:"props,omitempty"`
 
 	// 运行时字段（不存储到数据库）
 	ImageGenerationStatus *string `gorm:"-" json:"image_generation_status,omitempty"`
@@ -86,6 +87,7 @@ type Episode struct {
 	Storyboards []Storyboard `gorm:"foreignKey:EpisodeID" json:"storyboards,omitempty"`
 	Characters  []Character  `gorm:"many2many:episode_characters;" json:"characters,omitempty"`
 	Scenes      []Scene      `gorm:"foreignKey:EpisodeID" json:"scenes,omitempty"`
+	Props       []Prop       `gorm:"many2many:episode_props;" json:"props,omitempty"`
 }
 
 func (e *Episode) TableName() string {
@@ -144,6 +146,8 @@ type Scene struct {
 	UpdatedAt       time.Time      `gorm:"not null;autoUpdateTime" json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 
+	Props []Prop `gorm:"many2many:scene_props;" json:"props,omitempty"`
+
 	// 运行时字段（不存储到数据库）
 	ImageGenerationStatus *string `gorm:"-" json:"image_generation_status,omitempty"`
 	ImageGenerationError  *string `gorm:"-" json:"image_generation_error,omitempty"`
@@ -156,12 +160,14 @@ func (s *Scene) TableName() string {
 type Prop struct {
 	ID              uint           `gorm:"primaryKey;autoIncrement" json:"id"`
 	DramaID         uint           `gorm:"not null;index" json:"drama_id"`
-	Name            string         `gorm:"type:varchar(100);not null" json:"name"`
+	Name            string         `gorm:"type:varchar(100);not null;uniqueIndex" json:"name"`
 	Type            *string        `gorm:"type:varchar(50)" json:"type"` // e.g., "weapon", "daily", "vehicle"
 	Description     *string        `gorm:"type:text" json:"description"`
 	Prompt          *string        `gorm:"type:text" json:"prompt"` // AI Image prompt
 	ImageURL        *string        `gorm:"type:varchar(500)" json:"image_url"`
 	ReferenceImages datatypes.JSON `gorm:"type:json" json:"reference_images"`
+	Attributes      datatypes.JSON `gorm:"type:json" json:"attributes"`
+	CreatedBy       *uint          `gorm:"index" json:"created_by"`
 	CreatedAt       time.Time      `gorm:"not null;autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time      `gorm:"not null;autoUpdateTime" json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
@@ -169,8 +175,55 @@ type Prop struct {
 	// Relationships
 	Drama       Drama        `gorm:"foreignKey:DramaID" json:"drama,omitempty"`
 	Storyboards []Storyboard `gorm:"many2many:storyboard_props;" json:"storyboards,omitempty"`
+	Characters  []Character  `gorm:"many2many:character_props;" json:"characters,omitempty"`
+	Scenes      []Scene      `gorm:"many2many:scene_props;" json:"scenes,omitempty"`
 }
 
 func (p *Prop) TableName() string {
 	return "props"
+}
+
+type CharacterProp struct {
+	CharacterID uint      `gorm:"primaryKey;autoIncrement:false" json:"character_id"`
+	PropID      uint      `gorm:"primaryKey;autoIncrement:false" json:"prop_id"`
+	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (c *CharacterProp) TableName() string {
+	return "character_props"
+}
+
+type SceneProp struct {
+	SceneID   uint      `gorm:"primaryKey;autoIncrement:false" json:"scene_id"`
+	PropID    uint      `gorm:"primaryKey;autoIncrement:false" json:"prop_id"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (s *SceneProp) TableName() string {
+	return "scene_props"
+}
+
+type EpisodeProp struct {
+	EpisodeID uint      `gorm:"primaryKey;autoIncrement:false" json:"episode_id"`
+	PropID    uint      `gorm:"primaryKey;autoIncrement:false" json:"prop_id"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (e *EpisodeProp) TableName() string {
+	return "episode_props"
+}
+
+type PropLibrary struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	PropID     uint      `gorm:"not null;index" json:"prop_id"`
+	UserID     uint      `gorm:"not null;index" json:"user_id"`
+	Permission string    `gorm:"type:varchar(20);default:'read'" json:"permission"`
+	CreatedAt  time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt  time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
+
+	Prop Prop `gorm:"foreignKey:PropID" json:"prop,omitempty"`
+}
+
+func (p *PropLibrary) TableName() string {
+	return "prop_library"
 }

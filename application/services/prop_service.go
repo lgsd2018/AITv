@@ -1,7 +1,9 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	// Added missing import
@@ -10,6 +12,7 @@ import (
 	"github.com/drama-generator/backend/pkg/config"
 	"github.com/drama-generator/backend/pkg/logger"
 	"github.com/drama-generator/backend/pkg/utils"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +24,20 @@ type PropService struct {
 	log                    *logger.Logger
 	config                 *config.Config
 	promptI18n             *PromptI18n
+	styleConsistencyService *StyleConsistencyService
+}
+
+type PropUpsertRequest struct {
+	DramaID      uint                   `json:"drama_id"`
+	Name         string                 `json:"name"`
+	Type         *string                `json:"type"`
+	Description  *string                `json:"description"`
+	Prompt       *string                `json:"prompt"`
+	ImageURL     *string                `json:"image_url"`
+	Attributes   map[string]interface{} `json:"attributes"`
+	CharacterIDs *[]uint                `json:"character_ids"`
+	SceneIDs     *[]uint                `json:"scene_ids"`
+	CreatedBy    *uint                  `json:"created_by"`
 }
 
 func NewPropService(db *gorm.DB, aiService *AIService, taskService *TaskService, imageGenerationService *ImageGenerationService, log *logger.Logger, cfg *config.Config) *PropService {
@@ -32,26 +49,161 @@ func NewPropService(db *gorm.DB, aiService *AIService, taskService *TaskService,
 		log:                    log,
 		config:                 cfg,
 		promptI18n:             NewPromptI18n(cfg),
+		styleConsistencyService: NewStyleConsistencyService(cfg, log),
 	}
 }
 
 // ListProps 获取剧本的道具列表
 func (s *PropService) ListProps(dramaID uint) ([]models.Prop, error) {
 	var props []models.Prop
-	if err := s.db.Where("drama_id = ?", dramaID).Find(&props).Error; err != nil {
+	if err := s.db.Preload("Characters").Preload("Scenes").Where("drama_id = ?", dramaID).Find(&props).Error; err != nil {
 		return nil, err
 	}
 	return props, nil
 }
 
-// CreateProp 创建道具
-func (s *PropService) CreateProp(prop *models.Prop) error {
-	return s.db.Create(prop).Error
+func (s *PropService) ListEpisodeProps(episodeID uint) ([]models.Prop, error) {
+	var episode models.Episode
+	if err := s.db.Preload("Props").Preload("Props.Characters").Preload("Props.Scenes").First(&episode, episodeID).Error; err != nil {
+		return nil, err
+	}
+	return episode.Props, nil
 }
 
-// UpdateProp 更新道具
-func (s *PropService) UpdateProp(id uint, updates map[string]interface{}) error {
-	return s.db.Model(&models.Prop{}).Where("id = ?", id).Updates(updates).Error
+func (s *PropService) CreatePropWithRelations(req *PropUpsertRequest) (*models.Prop, error) {
+	attributesJSON := datatypes.JSON([]byte("{}"))
+	if req.Attributes != nil {
+		data, err := json.Marshal(req.Attributes)
+		if err != nil {
+			return nil, err
+		}
+		attributesJSON = datatypes.JSON(data)
+	}
+
+	prop := &models.Prop{
+		DramaID:    req.DramaID,
+		Name:       strings.TrimSpace(req.Name),
+		Type:       req.Type,
+		Description: req.Description,
+		Prompt:     req.Prompt,
+		ImageURL:   req.ImageURL,
+		Attributes: attributesJSON,
+		CreatedBy:  req.CreatedBy,
+	}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(prop).Error; err != nil {
+			return err
+		}
+
+		if req.CharacterIDs != nil {
+			var characters []models.Character
+			if len(*req.CharacterIDs) > 0 {
+				if err := tx.Where("id IN ?", *req.CharacterIDs).Find(&characters).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(prop).Association("Characters").Replace(characters); err != nil {
+				return err
+			}
+		}
+
+		if req.SceneIDs != nil {
+			var scenes []models.Scene
+			if len(*req.SceneIDs) > 0 {
+				if err := tx.Where("id IN ?", *req.SceneIDs).Find(&scenes).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(prop).Association("Scenes").Replace(scenes); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return prop, nil
+}
+
+func (s *PropService) UpdatePropWithRelations(id uint, req *PropUpsertRequest) (*models.Prop, error) {
+	var prop models.Prop
+	if err := s.db.First(&prop, id).Error; err != nil {
+		return nil, err
+	}
+
+	updates := map[string]interface{}{}
+	if strings.TrimSpace(req.Name) != "" {
+		updates["name"] = strings.TrimSpace(req.Name)
+	}
+	if req.Type != nil {
+		updates["type"] = req.Type
+	}
+	if req.Description != nil {
+		updates["description"] = req.Description
+	}
+	if req.Prompt != nil {
+		updates["prompt"] = req.Prompt
+	}
+	if req.ImageURL != nil {
+		updates["image_url"] = req.ImageURL
+	}
+	if req.Attributes != nil {
+		data, err := json.Marshal(req.Attributes)
+		if err != nil {
+			return nil, err
+		}
+		updates["attributes"] = datatypes.JSON(data)
+	}
+	if req.CreatedBy != nil {
+		updates["created_by"] = req.CreatedBy
+	}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if len(updates) > 0 {
+			if err := tx.Model(&prop).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+
+		if req.CharacterIDs != nil {
+			var characters []models.Character
+			if len(*req.CharacterIDs) > 0 {
+				if err := tx.Where("id IN ?", *req.CharacterIDs).Find(&characters).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&prop).Association("Characters").Replace(characters); err != nil {
+				return err
+			}
+		}
+
+		if req.SceneIDs != nil {
+			var scenes []models.Scene
+			if len(*req.SceneIDs) > 0 {
+				if err := tx.Where("id IN ?", *req.SceneIDs).Find(&scenes).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&prop).Association("Scenes").Replace(scenes); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.db.Preload("Characters").Preload("Scenes").First(&prop, prop.ID).Error; err != nil {
+		return nil, err
+	}
+
+	return &prop, nil
 }
 
 // DeleteProp 删除道具
@@ -59,11 +211,49 @@ func (s *PropService) DeleteProp(id uint) error {
 	return s.db.Delete(&models.Prop{}, id).Error
 }
 
+func (s *PropService) AddPropToLibrary(propID uint, userID uint, permission string) (*models.PropLibrary, error) {
+	if strings.TrimSpace(permission) == "" {
+		permission = "read"
+	}
+	item := &models.PropLibrary{
+		PropID:     propID,
+		UserID:     userID,
+		Permission: permission,
+	}
+	if err := s.db.Create(item).Error; err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *PropService) ListPropLibrary(userID uint) ([]models.PropLibrary, error) {
+	var items []models.PropLibrary
+	if err := s.db.Preload("Prop").Where("user_id = ?", userID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *PropService) UpdatePropLibraryPermission(id uint, permission string) error {
+	if strings.TrimSpace(permission) == "" {
+		return fmt.Errorf("permission is required")
+	}
+	return s.db.Model(&models.PropLibrary{}).Where("id = ?", id).Update("permission", permission).Error
+}
+
+func (s *PropService) RemovePropFromLibrary(id uint) error {
+	return s.db.Delete(&models.PropLibrary{}, id).Error
+}
+
 // ExtractPropsFromScript 从剧本提取道具（异步）
 func (s *PropService) ExtractPropsFromScript(episodeID uint) (string, error) {
 	var episode models.Episode
 	if err := s.db.First(&episode, episodeID).Error; err != nil {
 		return "", fmt.Errorf("episode not found: %w", err)
+	}
+
+	if episode.ScriptContent == nil || strings.TrimSpace(*episode.ScriptContent) == "" {
+		return "", fmt.Errorf("剧本内容为空")
 	}
 
 	task, err := s.taskService.CreateTask("prop_extraction", fmt.Sprintf("%d", episodeID))
@@ -109,6 +299,16 @@ func (s *PropService) processPropExtraction(taskID string, episode models.Episod
 
 	var createdProps []models.Prop
 	for _, p := range extractedProps {
+		var count int64
+		s.db.Model(&models.Prop{}).Where("drama_id = ? AND name = ?", episode.DramaID, p.Name).Count(&count)
+		if count > 0 {
+			var existingProp models.Prop
+			if err := s.db.Where("drama_id = ? AND name = ?", episode.DramaID, p.Name).First(&existingProp).Error; err == nil {
+				_ = s.db.Model(&episode).Association("Props").Append(&existingProp)
+			}
+			continue
+		}
+
 		prop := models.Prop{
 			DramaID:     episode.DramaID,
 			Name:        p.Name,
@@ -116,28 +316,14 @@ func (s *PropService) processPropExtraction(taskID string, episode models.Episod
 			Description: &p.Description,
 			Prompt:      &p.ImagePrompt,
 		}
-		// 检查是否已存在同名道具（避免重复）
-		var count int64
-		s.db.Model(&models.Prop{}).Where("drama_id = ? AND name = ?", episode.DramaID, p.Name).Count(&count)
-		if count == 0 {
-			if err := s.db.Create(&prop).Error; err == nil {
-				createdProps = append(createdProps, prop)
-			}
+		if err := s.db.Create(&prop).Error; err == nil {
+			createdProps = append(createdProps, prop)
+			_ = s.db.Model(&episode).Association("Props").Append(&prop)
 		}
 	}
 
 	s.taskService.UpdateTaskResult(taskID, createdProps)
 }
-
-// GeneratePropImage 生成道具图片
-// 这里可以复用 ImageGenerationService，或者直接调用 AI Service
-// 简单起见，这里直接调用 ImageGenerationService 如果可以，或者 AI Service.
-// 为了保持架构一致性，应该创建一个 ImageGeneration 记录，然后复用现有的图片生成流程？
-// 但为了简单快速实现，这里先写一个专用的方法，或者更好的方式是：
-// 创建一个 ImageGeneration 记录，类型设为 "prop"，然后复用 ImageGenerationService 的逻辑。
-// 但 ImageGenerationService 目前绑定了 Storyboard/Scene ID 等。
-// 所以这里实现一个简化的直接生成逻辑，或者扩展 ImageGenerationService。
-// 鉴于时间，我实现一个简化的直接生成并保存图片的方法。
 
 func (s *PropService) GeneratePropImage(propID uint) (string, error) {
 	// 1. 获取道具信息
@@ -165,6 +351,8 @@ func (s *PropService) processPropImageGeneration(taskID string, prop models.Prop
 
 	// 准备生成参数
 	imageStyle := s.config.Style.DefaultStyle
+	targetStyle := ""
+	referenceWork := ""
 	if s.config != nil && s.config.Style.DefaultPropStyle != "" {
 		imageStyle += ", " + s.config.Style.DefaultPropStyle
 	}
@@ -174,6 +362,12 @@ func (s *PropService) processPropImageGeneration(taskID string, prop models.Prop
 	if err := s.db.First(&drama, prop.DramaID).Error; err == nil {
 		if drama.StylePrompt != nil && *drama.StylePrompt != "" {
 			imageStyle += ", " + *drama.StylePrompt
+			targetStyle = *drama.StylePrompt
+		} else if drama.Style != "" && drama.Style != "realistic" {
+			targetStyle = drama.Style
+		}
+		if drama.ReferenceWork != nil && *drama.ReferenceWork != "" {
+			referenceWork = *drama.ReferenceWork
 		}
 	}
 
@@ -182,12 +376,21 @@ func (s *PropService) processPropImageGeneration(taskID string, prop models.Prop
 		imageSize = s.config.Style.DefaultImageSize
 	}
 
+	prompt := *prop.Prompt
+	if s.styleConsistencyService != nil {
+		normalizedPrompt, violations := s.styleConsistencyService.NormalizeAndValidatePrompt(prompt, targetStyle, referenceWork)
+		if len(violations) > 0 {
+			s.log.Infow("Prop prompt normalized by style consistency", "prop_id", prop.ID, "violations", violations)
+		}
+		prompt = normalizedPrompt
+	}
+
 	// 创建生成请求
 	req := &GenerateImageRequest{
 		DramaID:   fmt.Sprintf("%d", prop.DramaID),
 		PropID:    &prop.ID,
 		ImageType: string(models.ImageTypeProp),
-		Prompt:    *prop.Prompt,
+		Prompt:    prompt,
 		Size:      imageSize,
 		Style:     &imageStyle,
 		Provider:  s.config.AI.DefaultImageProvider, // 使用默认配置

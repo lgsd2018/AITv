@@ -287,6 +287,15 @@
                   </el-button>
                   <el-button 
                     size="small" 
+                    :icon="MagicStick"
+                    :loading="batchGeneratingBackgrounds"
+                    :disabled="!episodeId"
+                    @click="handleBatchGenerateBackgrounds"
+                  >
+                    批量生成
+                  </el-button>
+                  <el-button 
+                    size="small" 
                     :icon="Upload"
                     @click="handleUploadBackground"
                   >
@@ -428,6 +437,7 @@ import {
   ArrowLeft
 } from '@element-plus/icons-vue'
 import { dramaAPI } from '@/api/drama'
+import { imageAPI } from '@/api/image'
 import { videoAPI } from '@/api/video'
 import { useRouter } from 'vue-router'
 
@@ -671,7 +681,42 @@ const formatDuration = (seconds: number) => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 }
 
+const formatImageGenerationError = (error: any, fallback: string) => {
+  const message = error?.response?.data?.error?.message || error?.message || fallback
+  const normalized = String(message || '').toLowerCase()
+  if (
+    normalized.includes('no such host') ||
+    normalized.includes('dial tcp') ||
+    normalized.includes('ark.cn-beijing.volces.com')
+  ) {
+    return 'AI服务地址无法解析，请在 设置 > AI服务配置 中切换可用服务或检查网络/DNS'
+  }
+  if (normalized.includes('no active config found')) {
+    return '未找到可用的AI服务配置，请先在 设置 > AI服务配置 中启用配置'
+  }
+  return message || fallback
+}
+
 const generating = ref(false)
+const batchGeneratingBackgrounds = ref(false)
+
+// 轮询单个背景图片生成状态
+const pollImageGenerationStatus = async (imageGenId: number) => {
+  const maxAttempts = 100
+  const pollInterval = 6000
+  for (let i = 0; i < maxAttempts; i++) {
+    // 等待下一次轮询
+    await new Promise(resolve => setTimeout(resolve, pollInterval))
+    const imageGen = await imageAPI.getImage(imageGenId)
+    if (imageGen.status === 'completed') {
+      return
+    }
+    if (imageGen.status === 'failed') {
+      throw new Error(imageGen.error_msg || '生成失败')
+    }
+  }
+  throw new Error('生成超时')
+}
 
 const handleGenerateBackground = async () => {
   if (!currentShot.value || !currentShot.value.id) {
@@ -722,10 +767,63 @@ const handleGenerateBackground = async () => {
     emit('refresh')
   } catch (error: any) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '生成失败')
+      ElMessage.error(formatImageGenerationError(error, '生成失败'))
     }
   } finally {
     generating.value = false
+  }
+}
+
+const handleBatchGenerateBackgrounds = async () => {
+  if (!props.episodeId) {
+    ElMessage.error('章节信息不存在')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '将为本章节所有背景生成图片，是否继续？',
+      '批量生成背景',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    batchGeneratingBackgrounds.value = true
+    ElMessage.info('正在提交背景批量生成任务...')
+    const response = await dramaAPI.batchGenerateBackgrounds(props.episodeId)
+    // 兼容后端返回格式
+    const imageGenerations = Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response)
+        ? response
+        : []
+    if (imageGenerations.length === 0) {
+      ElMessage.warning('未生成任何背景任务')
+      return
+    }
+    // 批量轮询生成状态
+    ElMessage.info(`已提交${imageGenerations.length}个背景生成任务，正在生成...`)
+    const pollResults = await Promise.allSettled(
+      imageGenerations.map((img: any) => pollImageGenerationStatus(img.id))
+    )
+    const successCount = pollResults.filter(result => result.status === 'fulfilled').length
+    const failCount = pollResults.filter(result => result.status === 'rejected').length
+    if (failCount === 0) {
+      ElMessage.success(`背景批量生成完成，共${successCount}个`)
+    } else {
+      ElMessage.warning(`背景批量生成完成：${successCount}个成功，${failCount}个失败`)
+    }
+    await loadBackgrounds()
+    emit('refresh')
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(formatImageGenerationError(error, '批量生成失败'))
+    }
+  } finally {
+    batchGeneratingBackgrounds.value = false
   }
 }
 

@@ -16,6 +16,7 @@ func LoggerMiddleware(log *logger.Logger) gin.HandlerFunc {
 		c.Next()
 
 		duration := time.Since(start)
+		requestID := c.GetHeader("X-Request-Id")
 
 		log.Infow("HTTP Request",
 			"method", c.Request.Method,
@@ -23,6 +24,7 @@ func LoggerMiddleware(log *logger.Logger) gin.HandlerFunc {
 			"query", query,
 			"status", c.Writer.Status(),
 			"duration", duration.Milliseconds(),
+			"request_id", requestID,
 			"ip", c.ClientIP(),
 			"user_agent", c.Request.UserAgent(),
 		)
